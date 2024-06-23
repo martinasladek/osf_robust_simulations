@@ -1,0 +1,207 @@
+## 2-NUM-INT
+
+### Overall model fit
+
+```{r, fig.height=42.9, fig.width=10}
+power_overall_plot_between_cat(between_num_list[['2-NUM-INT']]$sim_df_power_sum_overall)
+```
+
+
+
+### Power/false-positives
+
+```{r, fig.height=42.9, fig.width=10}
+power_plot_between_cat(between_num_list[['2-NUM-INT']]$sim_df_power_sum)
+```
+
+
+
+### Bias 
+
+#### Mean bias 
+
+```{r, fig.height=42.9, fig.width=10}
+bias_mean_plot_between_cat(between_num_list[['2-NUM-INT']]$sim_df_bias_sum)
+```
+
+
+
+#### SD bias 
+
+```{r, fig.height=42.9, fig.width=10}
+bias_sd_plot_between_cat(between_num_list[['2-NUM-INT']]$sim_df_bias_sum)
+```
+
+
+
+### CI coverage
+
+```{r, fig.height=42.9, fig.width=10}
+cover_plot_between_cat(between_num_list[['2-NUM-INT']]$sim_df_cover_sum)
+```
+
+
+
+### CI bias-shifted coverage
+
+```{r, fig.height=42.9, fig.width=10}
+cover_plot_between_cat(between_num_list[['2-NUM-INT']]$sim_df_cover_shift_sum)
+```
+
+
+
+### CI width
+
+```{r, fig.height=42.9, fig.width=10}
+ci_width_plot_between_cat(between_num_list[['2-NUM-INT']]$sim_df_ci_width_sum)
+```
+
+
+
+### Model errors
+
+```{r, fig.height=42.9, fig.width=10}
+model_errors_plot_between_cat(between_num_list[['2-NUM-INT']]$sim_df_model_errors_sum)
+```
+
+
+
+
+## 3-NUM-INT
+
+### Overall model fit
+
+```{r, fig.height=42.9, fig.width=10}
+power_overall_plot_between_cat(between_num_list[['3-NUM-INT']]$sim_df_power_sum_overall)
+```
+
+
+
+### Power/false-positives
+
+```{r, fig.height=42.9, fig.width=10}
+power_plot_between_cat(between_num_list[['3-NUM-INT']]$sim_df_power_sum)
+```
+
+
+
+### Bias 
+
+#### Mean bias 
+
+```{r, fig.height=42.9, fig.width=10}
+bias_mean_plot_between_cat(between_num_list[['3-NUM-INT']]$sim_df_bias_sum)
+```
+
+
+
+#### SD bias 
+
+```{r, fig.height=42.9, fig.width=10}
+bias_sd_plot_between_cat(between_num_list[['3-NUM-INT']]$sim_df_bias_sum)
+```
+
+
+
+### CI coverage
+
+```{r, fig.height=42.9, fig.width=10}
+cover_plot_between_cat(between_num_list[['3-NUM-INT']]$sim_df_cover_sum)
+```
+
+
+
+### CI bias-shifted coverage
+
+```{r, fig.height=42.9, fig.width=10}
+cover_plot_between_cat(between_num_list[['3-NUM-INT']]$sim_df_cover_shift_sum)
+```
+
+
+
+### CI width
+
+```{r, fig.height=42.9, fig.width=10}
+ci_width_plot_between_cat(between_num_list[['3-NUM-INT']]$sim_df_ci_width_sum)
+```
+
+
+
+### Model errors
+
+```{r, fig.height=42.9, fig.width=10}
+model_errors_plot_between_cat(between_num_list[['3-NUM-INT']]$sim_df_model_errors_sum)
+```
+
+
+
+
+## N-NUM
+
+### Overall model fit
+
+```{r, fig.height=152.1, fig.width=10}
+power_overall_plot_between_cat(between_num_list[['N-NUM']]$sim_df_power_sum_overall)
+```
+
+
+
+### Power/false-positives
+
+```{r, fig.height=152.1, fig.width=10}
+power_plot_between_cat(between_num_list[['N-NUM']]$sim_df_power_sum)
+```
+
+
+
+### Bias 
+
+#### Mean bias 
+
+```{r, fig.height=152.1, fig.width=10}
+bias_mean_plot_between_cat(between_num_list[['N-NUM']]$sim_df_bias_sum)
+```
+
+
+
+#### SD bias 
+
+```{r, fig.height=152.1, fig.width=10}
+bias_sd_plot_between_cat(between_num_list[['N-NUM']]$sim_df_bias_sum)
+```
+
+
+
+### CI coverage
+
+```{r, fig.height=152.1, fig.width=10}
+cover_plot_between_cat(between_num_list[['N-NUM']]$sim_df_cover_sum)
+```
+
+
+
+### CI bias-shifted coverage
+
+```{r, fig.height=152.1, fig.width=10}
+cover_plot_between_cat(between_num_list[['N-NUM']]$sim_df_cover_shift_sum)
+```
+
+
+
+### CI width
+
+```{r, fig.height=152.1, fig.width=10}
+ci_width_plot_between_cat(between_num_list[['N-NUM']]$sim_df_ci_width_sum)
+```
+
+
+
+### Model errors
+
+```{r, fig.height=152.1, fig.width=10}
+model_errors_plot_between_cat(between_num_list[['N-NUM']]$sim_df_model_errors_sum)
+```
+
+
+
+

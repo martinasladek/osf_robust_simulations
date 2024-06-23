@@ -1,0 +1,79 @@
+---
+title: Simulation summaries 
+format: 
+  html:
+    toc: true
+    toc-depth: 5
+    toc-expand: 2
+    fig-align: center
+   # embed-resources: true
+    
+knitr: 
+  opts_chunk: 
+    echo: false
+    message: false
+    warning: false
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggiraph)
+
+source(here::here("scripts/generate_between_cat.R"))
+source(here::here("scripts/generate_between_num.R"))
+source(here::here("scripts/generate_between_mixed.R"))
+source(here::here("scripts/generate_within.R"))
+```
+
+Summaries to generate for each of between: 
+
+1. Overall power
+2. Predictor Power
+3. Bias
+    - mean
+    - sd
+4. Coverage 
+5. Shifted Coverage 
+6. CI Width 
+8. Model Errors 
+
+Summaries to generate for each of within: 
+
+1. Overall power (3W only)
+2. Power/false-positives
+3. Bias
+    - mean
+    - sd
+4. Coverage (2W and 3W only)    
+5. Shifted coverage (2W and 3W only)  
+6. CI Width  (2W and 3W only)  
+7. Model Errors 
+
+
+
+
+<!-- # Between/cross-sectional designs: categorical -->
+
+<!-- ```{r child = "../summary_qmds/between_cat.qmd"} -->
+<!-- ``` -->
+
+
+<!-- # Between/cross-sectional designs: numeric -->
+
+<!-- ```{r child = "../summary_qmds/between_num.qmd"} -->
+<!-- ``` -->
+
+# Between/cross-sectional designs: mixed
+
+```{r child = "../summary_qmds/between_mixed.qmd"}
+```
+
+
+<!-- # Within- or Mixed- measures designs -->
+
+<!-- ```{r child = "../summary_qmds/within_cat.qmd"} -->
+<!-- ``` -->
+
+
+

@@ -1,0 +1,1371 @@
+---
+title: Overview of results 
+format: 
+  html: 
+    toc: true
+    toc-depth: 5
+    embed-resources: true
+    df-print: kable
+knitr: 
+  opts_chunk: 
+    echo: false
+    message: false
+    results: false
+---
+
+# Performance of OLS models in typical conditions
+
+```{r message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(ggiraph)
+
+source(here::here("scripts/generate_between_cat.R"))
+source(here::here("scripts/generate_between_num.R"))
+source(here::here("scripts/generate_between_mixed.R"))
+source(here::here("scripts/generate_within.R"))
+```
+
+## Between/cross sectional designs
+
+-   Skewness 0.5, Kurtosis = 0.9
+-   N ratio 1.3,
+-   VR = 2.1
+-   Target heteroscedasticity: 0.4/-0.5
+
+### Overall model fit
+
+#### Categorical predictors
+
+```{r}
+
+rbind(
+  between_cat_list$`CAT-2B`$sim_df_overall_sum, 
+  between_cat_list$`CAT-3B`$sim_df_overall_sum, 
+  between_cat_list$`CAT-2B-2B`$sim_df_overall_sum, 
+  between_cat_list$`CAT-2B-3B`$sim_df_overall_sum, 
+  between_cat_list$`CAT-3B-3B`$sim_df_overall_sum, 
+  between_cat_list$`CAT-2B-2B-INT`$sim_df_overall_sum, 
+  between_cat_list$`CAT-2B-3B-INT`$sim_df_overall_sum, 
+  between_cat_list$`CAT-3B-3B-INT`$sim_df_overall_sum, 
+) |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(
+    n_bw == 296, n_ratio == 1.3, target_vr == 2.1, target_skew == 0.5, n_het_pred == 1
+  ) |> 
+  dplyr::select(design, b, prop_sig) |> 
+  tidyr::pivot_wider(id_cols = design, names_from = b, values_from = prop_sig)
+
+
+```
+
+::: callout-note
+-   Rate of false-positives is slightly increased for most designs (except 3B-3B). 2B-2B-INT goes above 0.08.
+-   Power:
+    -   b = 0.1: Hovers around 0.10 for most designs. Between 0.13-0.15 for 2B and the interaction designs.
+    -   b = 0.3: Upwards of 0.32 for 3B. Between 0.40 and 0.50 for 2-predictor designs and 2B. Good power for interaction designs.
+    -   b = 0.5: Adequately powered.
+-   Similar findings for 2 heteroscedastic predictors
+
+Adding a second heteroscedastic predictor can have unpredictable effects in designs where the distribution of the residuals is asymmetrical - there were minor increases in false positives but also power, especially in designs with interactions. In real models, this will be highly dependent on which cells are affected by the increased VR. Judging from symmetrical designs, an additional heteroscedastic predictor is consistently associated with decrease in statistical power.
+:::
+
+#### Numeric predictors (+ interactions)
+
+```{r}
+between_num_list$`N-NUM`$sim_df_power_sum_overall |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_het_pred == 1, target_het %in% c(0.4, -0.5), 
+                n_bw == 296, b %in% c(0, 0.1, 0.3)) |> 
+  dplyr::select(b, n_bw, het_shape, prop_sig, n_preds) |> 
+  tidyr::pivot_wider(id_cols = c(b, n_bw, het_shape), names_from = n_preds, values_from = prop_sig) 
+```
+
+```{r}
+between_num_list$`2-NUM-INT`$sim_df_power_sum_overall |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_het_pred == 1, target_het %in% c(0.4, -0.5), 
+                n_bw == 296, b %in% c(0, 0.1, 0.3)) |> 
+  dplyr::select(b, n_bw, het_shape, prop_sig, n_preds) |> 
+  tidyr::pivot_wider(id_cols = c(b, n_bw, het_shape), names_from = n_preds, values_from = prop_sig)
+```
+
+::: callout-note
+At typical sample size (n = 296):
+
+-   False-positives: hover around 0.07 for VP2/4 and 1-2 predictors. Closer to 0.05 with more predictors. VP3 low rate initially - 0.02. Improves up to 0.04 for 6 predictors
+-   Power:
+    -   b = 0.1: Low power for all VPs. Starting for 1 predictor VP2: 0.29, VP3: 0.20, VP4: 0.40. Overall fit only reaches good power above 0.8 with 6 predictors.
+    -   b = 0.3: good power across designs.
+-   Power slightly improves when another heteroscedastic predictor is added
+-   2-NUM-INT comparable results with N-NUM with 2 predictors, though slight improvement in power
+-   3-NUM-INT good power even for 0.1, although around 0.75 for VP3 and VP4.
+:::
+
+#### Mixed predictors (+ interactions)
+
+```{r}
+between_mixed_list$`N-NUM-CAT`$sim_df_overall_sum  |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_ratio == 1.3,
+                target_vr == 2.1,
+                #n_het_pred == 1, 
+                target_het %in% c(0.4, -0.5), 
+                n_bw == 296, b %in% c(0, 0.1, 0.3)) |> 
+  dplyr::select(b, het_shape, n_cat_preds, n_cont_preds, prop_sig) |> 
+  tidyr::pivot_wider(id_cols = c(b, het_shape, n_cat_preds), names_from = n_cont_preds, values_from = prop_sig) |> 
+  dplyr::arrange(b, het_shape, n_cat_preds)
+```
+
+```{r}
+between_mixed_list$`N-NUM-CAT-INT`$sim_df_overall_sum  |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_ratio == 1.3,
+                target_vr == 2.1,
+                #n_het_pred == 1, 
+                n_int == 1,
+                target_het %in% c(0.4, -0.5), 
+                n_bw == 296, b %in% c(0, 0.1, 0.3)) |> 
+  dplyr::select(b, het_shape, n_cat_preds, n_cont_preds, prop_sig) |> 
+  tidyr::pivot_wider(id_cols = c(b, het_shape, n_cat_preds), names_from = n_cont_preds, values_from = prop_sig) |> 
+  dplyr::arrange(b, het_shape, n_cat_preds)
+```
+
+::: callout-note
+-   Increased false-positives across designs, most severe with 1 predictor, varying between 0.08 and 0.12. For 8 predictors, all above at least 0.06.
+-   Power
+    -   b = 0.1 - between 0.42 and 0.55 for 1 predictor. Increases to over 0.70 for 3 predictors. Well powered for 8 predictors. VP2 and VP3 slightly more severe impact on power compared to VP4.
+-   Models with interaction similar rates of false positives and better power for b = 0.1: between 0.56 and 0.63 for 1 predictor, going up for more predictors. Again, best power for VP4.
+:::
+
+### Power and false positives for the effect of interest
+
+#### Categorical predictors
+
+```{r}
+rbind(
+  between_cat_list$`CAT-2B`$sim_df_power_sum,
+  between_cat_list$`CAT-3B`$sim_df_power_sum, 
+  between_cat_list$`CAT-2B-2B`$sim_df_power_sum, 
+  between_cat_list$`CAT-2B-3B`$sim_df_power_sum, 
+  between_cat_list$`CAT-3B-3B`$sim_df_power_sum, 
+  between_cat_list$`CAT-2B-2B-INT`$sim_df_power_sum, 
+  between_cat_list$`CAT-2B-3B-INT`$sim_df_power_sum, 
+  between_cat_list$`CAT-3B-3B-INT`$sim_df_power_sum, 
+) |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(
+    n_bw == 296, n_ratio == 1.3, target_vr == 2.1, target_skew == 0.5, n_het_pred == 1, name == "OLS"
+  ) |> 
+  dplyr::select(design, b, prop_sig) |> 
+  tidyr::pivot_wider(id_cols = design, names_from = b, values_from = prop_sig)
+```
+
+::: callout-note
+-   Rate of false positives is controlled well for CAT-3B-3B and CAT-2B-2B. CAT-3B-3B-INT slightly over-controls at 0.03, and other designs have increased rate ranging from 0.061 to 0.09.
+
+-   Power low across the board, with interaction designs being affected the most.
+
+    -   b = 0.1: power up to 0.18 for CAT-3B, hovers around 0.10 for other designs. Interaction designs max power of 0.07 for 2B-2B-INT.
+
+    -   b = 0.3: up to 0.5 for 2B, going lower for more complicated designs. Interactions up to 0.09
+
+    -   b = 0.5: Good power for 2B, 3B, and 2B-2B, below 0.7 for 2B-3B and 3B-3B. Interactions max power of 0.15.
+:::
+
+#### Numeric predictors (+ interactions)
+
+```{r}
+between_num_list$`N-NUM`$sim_df_power_sum |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_het_pred == 1, target_het %in% c(0.4, -0.5), name == "OLS", 
+                n_bw == 296, b != 0.5) |> 
+  dplyr::select(b, n_bw, het_shape, prop_sig, n_preds) |> 
+  tidyr::pivot_wider(id_cols = c(b, n_bw, het_shape), names_from = n_preds, values_from = prop_sig) 
+```
+
+```{r}
+between_num_list$`3-NUM-INT`$sim_df_power_sum |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_het_pred == 1, target_het %in% c(0.4, -0.5), 
+                n_bw == 296, name == "OLS", b != 0.5) |> 
+  dplyr::select(b, n_bw, het_shape, prop_sig, n_preds) |> 
+  tidyr::pivot_wider(id_cols = c(b, n_bw, het_shape), names_from = n_preds, values_from = prop_sig)
+```
+
+::: callout-note
+-   False positives: VP3 over-controls at 0.02, VP2 and VP4 slightly high rate at 0.07. Consistent across number of predictors
+-   Power:
+    -   b = 0.1: VP3 worst effect on power at 0.20, the VP2 0.29, then VP4 0.41. Power is dropping with more predictors in the model.
+    -   b = 0.3 and b = 0.5 are well powered
+-   Adding a heteroscedastic predictor slightly decreases power
+-   Similar findings for 2-NUM-INT, with the exception of VP4 which is lower for interaction effect at 0.27 for VP4. Further drop for interaction effect in 3-NUM-INT (e.g. VP4 b = 0.1 is only 0.18)
+:::
+
+#### Mixed predictors (+ interactions)
+
+Main effects:
+
+```{r}
+between_mixed_list$`N-NUM-CAT`$sim_df_power_sum  |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_ratio == 1.3,
+                target_vr == 2.1,
+                #n_het_pred == 1, 
+                target_het %in% c(0.4, -0.5), 
+                n_bw == 296, b %in% c(0, 0.3, 0.1), 
+                name == "OLS"
+                ) |> 
+  dplyr::select(b, het_shape, n_cat_preds, n_cont_preds, prop_sig) |> 
+  tidyr::pivot_wider(id_cols = c(b, het_shape, n_cat_preds), names_from = n_cont_preds, values_from = prop_sig) |> 
+  dplyr::arrange(b, het_shape, n_cat_preds)
+
+
+```
+
+Interactions:
+
+```{r}
+between_mixed_list$`N-NUM-CAT-INT`$sim_df_power_sum  |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_ratio == 1.3,
+                target_vr == 2.1,
+                #n_het_pred == 1, 
+                n_int == 2,
+                target_het %in% c(0.4, -0.5), 
+                n_bw == 296, b %in% c(0, 0.1, 0.3), 
+                name == "OLS"
+                ) |> 
+  dplyr::select(b, het_shape, n_cat_preds, n_cont_preds, prop_sig) |> 
+  tidyr::pivot_wider(id_cols = c(b, het_shape, n_cat_preds), names_from = n_cont_preds, values_from = prop_sig) |> 
+  dplyr::arrange(b, het_shape, n_cat_preds)
+```
+
+::: callout-note
+-   False-positives: Similar findings to N-NUM - VP3 hovers around 0.03, otherwise slightly higher.
+
+-   Power: Power overall lower than N-NUM, highest for VP4 0.35, decreasing with more predictors (also a small decrease with addition of another categorical predictor)
+
+-   Interactions: rates of false positives slightly lower. Power considerably lower with only 0.05 for VP3 b = 0.1 only 0.05 and around 0.1 for the other two VPs. For b = 0.3, a max of 0.50 for VP2. Further drop in power when additional interaction is added.
+:::
+
+### Bias
+
+#### Mean
+
+##### Categorical predictors
+
+```{r}
+rbind(
+  between_cat_list$`CAT-2B`$sim_df_bias_sum,
+  between_cat_list$`CAT-3B`$sim_df_bias_sum, 
+  between_cat_list$`CAT-2B-2B`$sim_df_bias_sum, 
+  between_cat_list$`CAT-2B-3B`$sim_df_bias_sum, 
+  between_cat_list$`CAT-3B-3B`$sim_df_bias_sum, 
+  between_cat_list$`CAT-2B-2B-INT`$sim_df_bias_sum, 
+  between_cat_list$`CAT-2B-3B-INT`$sim_df_bias_sum, 
+  between_cat_list$`CAT-3B-3B-INT`$sim_df_bias_sum, 
+) |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(
+    n_bw == 296, n_ratio == 1.3, target_vr %in% c(1, 2.1), target_skew == 0.5, n_het_pred %in% c(0, 1, 2), b == 0.1, name == "OLS"
+  ) |> 
+  dplyr::select(design, b, n_het_pred, mean_diff) |> 
+  tidyr::pivot_wider(
+    id_cols = design, names_from = n_het_pred, values_from = mean_diff, 
+    names_prefix = "n_het_")
+```
+
+::: callout-note
+-   No systematic bias with 0 heteroscedastic predictors.
+
+-   When heteroscedastic predictors are added - and the asymmetrical distribution is combined with larger variance in some of the cells, estimates are biased. Direction of the bias depends on the design - in our case, interactions showed negative bias and main effects showed positive bias (this can have a knock on effect on bias in the test statistic, where the test can either have greater rate of false-positives in case of positives or substantially reduced power in case of negative bias).
+
+    -   Non-interactions - lowest bias of 0.09 for 3B-3B, highest 0.15 for 3B
+
+    -   Interactions - highest bias of -0.16
+:::
+
+::: callout-important
+Note on heteroscedastic predictors: Depending on the design, the bias associated with heteroscedasticity can be "displaced" - e.g. some designs will have the largest bias when they only have one heteroscedastic predictor and others when they have more. Therefore, this is simulation dependent. Any conclusions about added heteroscedastic predictor in categoricak designs should only be made from the overall model fit section, not when looking at individual predictors.
+:::
+
+##### Numeric predictors (+ interactions)
+
+```{r}
+between_num_list$`N-NUM`$sim_df_bias_sum |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_het_pred %in% c(0, 1, 2), target_het %in% c(0, 0.4, -0.5), name == "OLS", 
+                n_bw == 296, b == 0.1) |> 
+  dplyr::select(het_shape, n_het_pred, mean_diff, n_preds) |> 
+  dplyr::arrange(n_het_pred) |> 
+  tidyr::pivot_wider(id_cols = c(het_shape, n_preds), names_from = n_het_pred, values_from = mean_diff)
+```
+
+```{r}
+between_num_list$`2-NUM-INT`$sim_df_bias_sum |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_het_pred %in% c(0, 1, 2), target_het %in% c(0, 0.4, -0.5), name == "OLS", 
+                n_bw == 296, b == 0.1) |> 
+  dplyr::select(het_shape, n_het_pred, mean_diff, n_preds) |> 
+  dplyr::arrange(n_het_pred) |> 
+  tidyr::pivot_wider(id_cols = c(het_shape, n_preds), names_from = n_het_pred, values_from = mean_diff)
+```
+
+::: callout-note
+Minimal bias for numeric-only designs. Small positive bias for VP4 main effects (the only asymmetrical heteroscedastic pattern) of 0.03.
+:::
+
+##### Mixed predictors (+ interactions)
+
+Main effects:
+
+```{r}
+between_mixed_list$`N-NUM-CAT`$sim_df_bias_sum  |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_ratio == 1.3,
+                target_vr %in% c(1, 2.1),
+                n_het_pred %in% c(0,1,2), 
+                target_het %in% c(0, 0.4, -0.5), 
+                n_bw == 296, b %in% c(0.1), 
+                name == "OLS"
+                ) |> 
+  dplyr::select(het_shape, target_vr, target_het, n_het_pred, n_cat_preds, n_cont_preds, mean_diff) |> 
+  tidyr::pivot_wider(id_cols = c(het_shape, target_vr, target_het, n_cat_preds, n_cont_preds), names_from = n_het_pred, values_from = mean_diff, names_prefix = "n_het_") |> 
+  dplyr::arrange(het_shape, target_vr, n_cont_preds, n_cat_preds)
+```
+
+Interactions:
+
+```{r}
+between_mixed_list$`N-NUM-CAT-INT`$sim_df_bias_sum  |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_ratio == 1.3, n_int %in% c(1, 2), 
+                target_vr %in% c(1, 2.1),
+                n_het_pred %in% c(0,1,2), 
+                target_het %in% c(0, 0.4, -0.5), 
+                n_bw == 296, b %in% c(0.1), 
+                name == "OLS"
+                ) |> 
+  dplyr::select(het_shape, n_int, n_het_pred, n_cat_preds, n_cont_preds, mean_diff) |> 
+  tidyr::pivot_wider(id_cols = c(het_shape, n_int, n_cat_preds, n_cont_preds), names_from = n_het_pred, values_from = mean_diff, names_prefix = "n_het_") |> 
+  dplyr::arrange(n_int, het_shape, n_cont_preds, n_cat_preds)
+```
+
+::: callout-note
+Bias negligible across all patterns apart from VP4 - similar as for numeric-only designs, with bias around 0.03 for main effects.
+
+Interaction effects affected in a less systematic way - both negative and positive bias present for all patterns up to 0.03 (again, exactly which combination of conditions is affected the most probably depends simulation quirks)
+:::
+
+#### Standard deviation
+
+##### Categorical predictors
+
+```{r}
+rbind(
+  between_cat_list$`CAT-2B`$sim_df_bias_sum,
+  between_cat_list$`CAT-3B`$sim_df_bias_sum, 
+  between_cat_list$`CAT-2B-2B`$sim_df_bias_sum, 
+  between_cat_list$`CAT-2B-3B`$sim_df_bias_sum, 
+  between_cat_list$`CAT-3B-3B`$sim_df_bias_sum, 
+  between_cat_list$`CAT-2B-2B-INT`$sim_df_bias_sum, 
+  between_cat_list$`CAT-2B-3B-INT`$sim_df_bias_sum, 
+  between_cat_list$`CAT-3B-3B-INT`$sim_df_bias_sum, 
+) |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(
+    n_bw == 296, n_ratio == 1.3, target_vr %in% c(1, 2.1), target_skew == 0.5, n_het_pred %in% c(0, 1, 2), b == 0.1, name == "OLS"
+  ) |> 
+  dplyr::select(design, b, n_het_pred, sd_diff) |> 
+  tidyr::pivot_wider(
+    id_cols = design, names_from = n_het_pred, values_from = sd_diff, 
+    names_prefix = "n_het_")
+```
+
+::: callout-note
+Generally loss of efficiency with increasing design complexity - 0.16 for 2B, 0.49 for 3B-3B-INT. Further decline with additional heteroscedastic predictors. E.g. for 3x3 factorial designs with two heteroscedastic predictors, the average difference from the population estimate was 0.54, meaning that 68% of estimates where within *b* $\pm$ 0.54, 95% within *b* $\pm$ 1.96\*0.54.
+:::
+
+##### Numeric predictors (+ interactions)
+
+```{r}
+between_num_list$`N-NUM`$sim_df_bias_sum |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_het_pred %in% c(0, 1, 2), target_het %in% c(0, 0.4, -0.5), name == "OLS", 
+                n_bw == 296, b == 0.1) |> 
+  dplyr::select(het_shape, n_het_pred, sd_diff, n_preds) |> 
+  dplyr::arrange(n_het_pred) |> 
+  tidyr::pivot_wider(id_cols = c(het_shape, n_preds), names_from = n_het_pred, values_from = sd_diff)
+```
+
+```{r}
+between_num_list$`2-NUM-INT`$sim_df_bias_sum |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_het_pred %in% c(0, 1, 2), target_het %in% c(0, 0.4, -0.5), name == "OLS", 
+                n_bw == 296, b == 0.1) |> 
+  dplyr::select(het_shape, n_het_pred, sd_diff, n_preds) |> 
+  dplyr::arrange(n_het_pred) |> 
+  tidyr::pivot_wider(id_cols = c(het_shape, n_preds), names_from = n_het_pred, values_from = sd_diff)
+```
+
+::: callout-note
+Considerably more efficient than categorical designs with a max SD of 0.09. Very slight systematic increase of SD for VP2 (change of 0.07 to 0.08). Similar pattern for main effects and interactions. Increase also seems to be driven by the number of predictors - 6 predictors reaching the highest values, 1 predictor-models
+:::
+
+##### Mixed predictors (+ interactions)
+
+Main effects:
+
+```{r}
+between_mixed_list$`N-NUM-CAT`$sim_df_bias_sum  |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_ratio == 1.3,
+                target_vr %in% c(1, 2.1),
+                n_het_pred %in% c(0,1,2), 
+                target_het %in% c(0, 0.4, -0.5), 
+                n_bw == 296, b %in% c(0.1), 
+                name == "OLS"
+                ) |> 
+  dplyr::select(het_shape, target_vr, target_het, n_het_pred, n_cat_preds, n_cont_preds, sd_diff) |> 
+  tidyr::pivot_wider(id_cols = c(het_shape, target_vr, target_het, n_cat_preds, n_cont_preds), names_from = n_het_pred, values_from = sd_diff, names_prefix = "n_het_") |> 
+  dplyr::arrange(het_shape, target_vr, n_cont_preds, n_cat_preds)
+```
+
+Interactions
+
+```{r}
+between_mixed_list$`N-NUM-CAT-INT`$sim_df_bias_sum  |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_ratio == 1.3, n_int %in% c(1, 2), 
+                target_vr %in% c(1, 2.1),
+                n_het_pred %in% c(0,1,2), 
+                target_het %in% c(0, 0.4, -0.5), 
+                n_bw == 296, b %in% c(0.1), 
+                name == "OLS"
+                ) |> 
+  dplyr::select(het_shape, n_int, n_het_pred, n_cat_preds, n_cont_preds, sd_diff) |> 
+  tidyr::pivot_wider(id_cols = c(het_shape, n_int, n_cat_preds, n_cont_preds), names_from = n_het_pred, values_from = sd_diff, names_prefix = "n_het_") |> 
+  dplyr::arrange(n_int, het_shape, n_cont_preds, n_cat_preds)
+```
+
+::: callout-note
+Similar as with numeric-only designs - up to 0.9, with highest values for 2 heteroscedastic predictors with VP2 but difference are minimal.
+
+Interactions overall less efficient - around 0.18 for no heteroscedasticity. Small increases notable with - additional interactions, additional predictors.
+:::
+
+### Coverage of CIs
+
+#### Categorical predictors
+
+```{r}
+dplyr::left_join(
+  rbind(
+    between_cat_list$`CAT-2B`$sim_df_cover_sum,
+    between_cat_list$`CAT-3B`$sim_df_cover_sum, 
+    between_cat_list$`CAT-2B-2B`$sim_df_cover_sum, 
+    between_cat_list$`CAT-2B-3B`$sim_df_cover_sum, 
+    between_cat_list$`CAT-3B-3B`$sim_df_cover_sum, 
+    between_cat_list$`CAT-2B-2B-INT`$sim_df_cover_sum, 
+    between_cat_list$`CAT-2B-3B-INT`$sim_df_cover_sum, 
+    between_cat_list$`CAT-3B-3B-INT`$sim_df_cover_sum, 
+  ) |> 
+    dplyr::ungroup() |> 
+    dplyr::filter(
+      n_bw == 296, n_ratio == 1.3, target_vr == 2.1, target_skew == 0.5, n_het_pred %in% c(1, 2), name == "OLS", b == "0.1"
+    ) |> 
+    dplyr::select(design, n_het_pred, prop_covered) |> 
+    tidyr::pivot_wider(id_cols = design, names_from = n_het_pred, values_from = prop_covered, names_prefix = "original_het_"),
+  
+  rbind(
+    between_cat_list$`CAT-2B`$sim_df_cover_shift_sum,
+    between_cat_list$`CAT-3B`$sim_df_cover_shift_sum, 
+    between_cat_list$`CAT-2B-2B`$sim_df_cover_shift_sum, 
+    between_cat_list$`CAT-2B-3B`$sim_df_cover_shift_sum, 
+    between_cat_list$`CAT-3B-3B`$sim_df_cover_shift_sum, 
+    between_cat_list$`CAT-2B-2B-INT`$sim_df_cover_shift_sum, 
+    between_cat_list$`CAT-2B-3B-INT`$sim_df_cover_shift_sum, 
+    between_cat_list$`CAT-3B-3B-INT`$sim_df_cover_shift_sum, 
+  ) |> 
+    dplyr::ungroup() |> 
+    dplyr::filter(
+      n_bw == 296, n_ratio == 1.3, target_vr %in% c(2.1), target_skew == 0.5, n_het_pred %in% c(1, 2), name == "OLS", b == "0.1"
+    ) |> 
+    dplyr::select(design, n_het_pred, prop_covered) |> 
+    tidyr::pivot_wider(id_cols = design, names_from = n_het_pred, values_from = prop_covered, names_prefix = "shifted_het_"), 
+  by = "design"
+  
+)
+```
+
+::: callout-note
+-   Coverage generally lower than nominal, with the exception of 3B-3B-INT which slightly over-covers at .97. Good coverage for 3B-3B. Other designs can go as low as 0.91.
+
+-   When corrected for bias most designs reach good coverage between .94 and .96. 2B over-covers at 0.98, 3B-3B-int remains the same, while 2B-3B-INT still only covers 0.93.
+:::
+
+#### Numeric predictors (+ interactions)
+
+Main
+
+```{r}
+dplyr::left_join(
+  between_num_list$`N-NUM`$sim_df_cover_sum |> 
+    dplyr::ungroup() |> 
+    dplyr::filter(target_skew == 0.5, 
+                  n_het_pred %in% c(0, 1, 2), target_het %in% c(0, 0.4, -0.5), name == "OLS", 
+                  n_bw == 296, b == 0.1, n_preds == 6) |> 
+    dplyr::select(b, n_bw, het_shape, n_het_pred, prop_covered, n_preds) |> 
+    dplyr::arrange(het_shape) |> 
+    tidyr::pivot_wider(id_cols = c(het_shape), names_from = n_het_pred, values_from = prop_covered, names_prefix = "original_het_"),
+  
+  
+  between_num_list$`N-NUM`$sim_df_cover_shift_sum |> 
+    dplyr::ungroup() |> 
+    dplyr::filter(target_skew == 0.5, 
+                  n_het_pred %in% c(0, 1, 2), target_het %in% c(0, 0.4, -0.5), name == "OLS", 
+                  n_bw == 296, b == 0.1, n_preds == 6) |> 
+    dplyr::select(b, n_bw, het_shape, n_het_pred, prop_covered, n_preds) |> 
+    dplyr::arrange(het_shape) |> 
+    tidyr::pivot_wider(id_cols = c(het_shape), names_from = n_het_pred, values_from = prop_covered, names_prefix = "shifted_het_") , 
+  by = "het_shape"
+)
+```
+
+Interactions:
+
+```{r}
+dplyr::left_join(
+  between_num_list$`2-NUM-INT`$sim_df_cover_sum |> 
+    dplyr::ungroup() |> 
+    dplyr::filter(target_skew == 0.5, 
+                  n_het_pred %in% c(0, 1, 2), target_het %in% c(0, 0.4, -0.5), name == "OLS", 
+                  n_bw == 296, b == 0.1) |> 
+    dplyr::select(b, n_bw, het_shape, n_het_pred, prop_covered, n_preds) |> 
+    dplyr::arrange(het_shape) |> 
+    tidyr::pivot_wider(id_cols = c(het_shape), names_from = n_het_pred, values_from = prop_covered, names_prefix = "original_het_"), 
+  
+  between_num_list$`2-NUM-INT`$sim_df_cover_shift_sum |> 
+    dplyr::ungroup() |> 
+    dplyr::filter(target_skew == 0.5, 
+                  n_het_pred %in% c(0, 1, 2), target_het %in% c(0, 0.4, -0.5), name == "OLS", 
+                  n_bw == 296, b == 0.1) |> 
+    dplyr::select(b, n_bw, het_shape, n_het_pred, prop_covered, n_preds) |> 
+    dplyr::arrange(het_shape) |> 
+    tidyr::pivot_wider(id_cols = c(het_shape), names_from = n_het_pred, values_from = prop_covered, names_prefix = "shifted_het_")
+)
+```
+
+::: callout-note
+Consistent across number of predictors. Good coverage for VP1 and VP4. Under-coverage for VP2, over-coverage for VP3 up to 0.99. Pattern of results consistent for main effects and interactions, regardless whether coverage is bias-shifted or not.
+:::
+
+#### Mixed predictors (+ interactions)
+
+Main effects:
+
+```{r}
+dplyr::left_join(
+  between_mixed_list$`N-NUM-CAT`$sim_df_cover_sum  |> 
+    dplyr::ungroup() |> 
+    dplyr::filter(target_skew == 0.5, 
+                  n_ratio == 1.3,
+                  target_vr %in% c(1, 2.1),
+                  n_het_pred %in% c(0, 1, 2), 
+                  target_het %in% c(0, 0.4, -0.5), 
+                  n_bw == 296, b %in% c(0.1), 
+                  name == "OLS", 
+                  n_cont_preds == 8, 
+                  n_cat_preds == 2
+    ) |> 
+    dplyr::select(b, het_shape, n_het_pred,  n_cat_preds, n_cont_preds, prop_covered) |> 
+    tidyr::pivot_wider(id_cols = c(het_shape), names_from = n_het_pred, values_from = prop_covered, names_prefix = "original_het_") |> 
+    dplyr::arrange(het_shape), 
+  
+  between_mixed_list$`N-NUM-CAT`$sim_df_cover_shift_sum  |> 
+    dplyr::ungroup() |> 
+    dplyr::filter(target_skew == 0.5, 
+                  n_ratio == 1.3,
+                  target_vr %in% c(1, 2.1),
+                  n_het_pred %in% c(0, 1, 2), 
+                  target_het %in% c(0, 0.4, -0.5), 
+                  n_bw == 296, b %in% c(0.1), 
+                  name == "OLS", 
+                  n_cont_preds == 8, 
+                  n_cat_preds == 2
+    ) |> 
+    dplyr::select(b, het_shape, n_het_pred,  n_cat_preds, n_cont_preds, prop_covered) |> 
+    tidyr::pivot_wider(id_cols = c(het_shape), names_from = n_het_pred, values_from = prop_covered, names_prefix = "shifted_het_") |> 
+    dplyr::arrange(het_shape), 
+  by = "het_shape"
+)
+```
+
+Interactions
+
+```{r}
+dplyr::left_join(
+  between_mixed_list$`N-NUM-CAT-INT`$sim_df_cover_sum  |> 
+    dplyr::ungroup() |> 
+    dplyr::filter(target_skew == 0.5, 
+                  n_ratio == 1.3,
+                  target_vr %in% c(1, 2.1),
+                  n_het_pred %in% c(0, 1, 2), 
+                  target_het %in% c(0, 0.4, -0.5), 
+                  n_bw == 296, b %in% c(0.1), 
+                  name == "OLS", 
+                  n_cont_preds == 8, 
+                  n_cat_preds %in% c(1, 2)
+    ) |> 
+    dplyr::select(b, het_shape, n_het_pred, n_int,  n_cat_preds, n_cont_preds, prop_covered) |> 
+    tidyr::pivot_wider(id_cols = c(het_shape, n_int), names_from = n_het_pred, values_from = prop_covered, names_prefix = "original_het_") |> 
+    dplyr::arrange(het_shape, n_int), 
+  
+  between_mixed_list$`N-NUM-CAT-INT`$sim_df_cover_shift_sum  |> 
+    dplyr::ungroup() |> 
+    dplyr::filter(target_skew == 0.5, 
+                  n_ratio == 1.3,
+                  target_vr %in% c(1, 2.1),
+                  n_het_pred %in% c(0, 1, 2), 
+                  target_het %in% c(0, 0.4, -0.5), 
+                  n_bw == 296, b %in% c(0.1), 
+                  name == "OLS", 
+                  n_cont_preds == 8, 
+                  n_cat_preds %in% c(1, 2)
+    ) |> 
+    dplyr::select(b, het_shape, n_het_pred, n_int, n_cat_preds, n_cont_preds, prop_covered) |> 
+    tidyr::pivot_wider(id_cols = c(het_shape, n_int), names_from = n_het_pred, values_from = prop_covered, names_prefix = "shifted_het_") |> 
+    dplyr::arrange(het_shape,n_int), 
+  by = c("het_shape", "n_int")
+)
+```
+
+::: callout-note
+Consistent across number of predictors (categorical or continuous). Good coverage when no heteroscedasticity. Consistent with numeric-only - VP2 and VP4 undercover at 0.93, VP3 over-covers at 0.97. Shifting coverage by the amount of bias only helps VP4, which reaches good 0.95 coverage.
+
+Same pattern of results for interactions, although here VP4 has good coverage across the board.
+:::
+
+### CI width
+
+#### Categorical predictors
+
+```{r}
+rbind(
+  between_cat_list$`CAT-2B`$sim_df_ci_width_sum,
+  between_cat_list$`CAT-3B`$sim_df_ci_width_sum, 
+  between_cat_list$`CAT-2B-2B`$sim_df_ci_width_sum, 
+  between_cat_list$`CAT-2B-3B`$sim_df_ci_width_sum, 
+  between_cat_list$`CAT-3B-3B`$sim_df_ci_width_sum, 
+  between_cat_list$`CAT-2B-2B-INT`$sim_df_ci_width_sum, 
+  between_cat_list$`CAT-2B-3B-INT`$sim_df_ci_width_sum, 
+  between_cat_list$`CAT-3B-3B-INT`$sim_df_ci_width_sum, 
+) |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(
+    n_bw == 296, n_ratio == 1.3, target_vr %in% c(1, 2.1), target_skew == 0.5, n_het_pred %in% c(0, 1, 2), b == 0.1, name == "OLS"
+  ) |> 
+  dplyr::select(design, b, n_het_pred, mean_width) |> 
+  tidyr::pivot_wider(
+    id_cols = design, names_from = n_het_pred, values_from = mean_width, 
+    names_prefix = "n_het_")
+```
+
+::: callout-note
+Increasing width with more complex design. With no heteroscedastic predictors, the lowest width is 0.67 for 2B and highest is 1.97 for 3B-3B-INT. Further increase with adding heteroscedastic predictors into the model, by approximately 0.10 for each predictor within each design. 3B-3B-INT has the highest width of 2.24 with two heteroscedastic predictor.
+:::
+
+#### Numeric predictors (+ interactions)
+
+Main effects:
+
+```{r}
+between_num_list$`N-NUM`$sim_df_ci_width_sum |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_het_pred %in% c(0, 1, 2), target_het %in% c(0, 0.4, -0.5), name == "OLS", 
+                n_bw == 296, b == 0.1) |> 
+  dplyr::select(het_shape, n_het_pred, mean_width, n_preds) |> 
+  dplyr::arrange(n_het_pred) |> 
+  tidyr::pivot_wider(id_cols = c(het_shape, n_preds), names_from = n_het_pred, values_from = mean_width)
+```
+
+Interactions - 2-NUM-INT
+
+```{r}
+between_num_list$`2-NUM-INT`$sim_df_ci_width_sum |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_het_pred %in% c(0, 1, 2), target_het %in% c(0, 0.4, -0.5), name == "OLS", 
+                n_bw == 296, b == 0.1) |> 
+  dplyr::select(het_shape, n_het_pred, mean_width, n_preds) |> 
+  dplyr::arrange(n_het_pred) |> 
+  tidyr::pivot_wider(id_cols = c(het_shape, n_preds), names_from = n_het_pred, values_from = mean_width)
+```
+
+Interactions - 3-NUM-INT
+
+```{r}
+between_num_list$`3-NUM-INT`$sim_df_ci_width_sum |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_het_pred %in% c(0, 1, 2), target_het %in% c(0, 0.4, -0.5), name == "OLS", 
+                n_bw == 296, b == 0.1) |> 
+  dplyr::select(het_shape, n_het_pred, mean_width, n_preds) |> 
+  dplyr::arrange(n_het_pred) |> 
+  tidyr::pivot_wider(id_cols = c(het_shape, n_preds), names_from = n_het_pred, values_from = mean_width)
+```
+
+::: callout-note
+Overall lower width than categorical predictors - up to 0.36 for VP1. Slight increases with additional predictors in the model (minimal, about 0.01 per predictor). No notable pattern when second heteroscedastic predictor is added. Width is slightly larger for VP2 and VP4 compared to VP3, but only by about 0.03.
+
+No notable differences in variance patterns for interactions, though the widths themselves are slightly smaller, at 0.3 for 2-NUM-INT. For 3-NUM-INT, widths range from 0.32 to 0.35 (in line with previous note where more complex designs have wider confidence intervals)
+:::
+
+#### Mixed predictors (+ interactions)
+
+Main effects:
+
+```{r}
+between_mixed_list$`N-NUM-CAT`$sim_df_ci_width_sum  |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_ratio == 1.3,
+                target_vr %in% c(1, 2.1),
+                n_het_pred %in% c(0,1,2), 
+                target_het %in% c(0, 0.4, -0.5), 
+                n_bw == 296, b %in% c(0.1), 
+                name == "OLS"
+                ) |> 
+  dplyr::select(het_shape, target_vr, target_het, n_het_pred, n_cat_preds, n_cont_preds, mean_width) |> 
+  tidyr::pivot_wider(
+    id_cols = c(het_shape, target_vr, target_het, n_cat_preds, n_cont_preds), 
+    names_from = n_het_pred, values_from = mean_width, 
+    names_prefix = "n_het_") |> 
+  dplyr::arrange(het_shape, target_vr, n_cont_preds, n_cat_preds)
+```
+
+Interactions:
+
+```{r}
+between_mixed_list$`N-NUM-CAT-INT`$sim_df_ci_width_sum  |> 
+  dplyr::ungroup() |> 
+  dplyr::filter(target_skew == 0.5, 
+                n_ratio == 1.3, n_int %in% c(1, 2), 
+                target_vr %in% c(1, 2.1),
+                n_het_pred %in% c(0,1,2), 
+                target_het %in% c(0, 0.4, -0.5), 
+                n_bw == 296, b %in% c(0.1), 
+                name == "OLS"
+                ) |> 
+  dplyr::select(het_shape, n_int, n_het_pred, n_cat_preds, n_cont_preds, mean_width) |> 
+  tidyr::pivot_wider(id_cols = c(het_shape, n_int, n_cat_preds, n_cont_preds), names_from = n_het_pred, values_from = mean_width, names_prefix = "n_het_") |> 
+  dplyr::arrange(n_int, het_shape, n_cont_preds, n_cat_preds)
+```
+
+::: callout-note
+Similar findings as for numeric-only designs. Largest width of 0.37 for 8 predictors with 2 categorical predictors. No systematic differences for other variance patterns (but VP2-4 are a little narrower compared to VP1). Additional minor increase of about 0.01 when another heteroscedastic predictor is added.
+
+Interactions - almost double the width. E.g. 8 predictors VP1 is 0.7. VP3 has narrowest intervals of 0.67. For VP2 and VP4 there's a small increase in width (about 0.03) with second heteroscedastic predictor, not observed for VP3.
+:::
+
+## Within/mixed designs
+
+### Power
+
+```{r}
+rbind(
+  within_cat_list$`CAT-2W`$sim_df_power_sum,
+  within_cat_list$`CAT-3W`$sim_df_power_sum,
+  within_cat_list$`CAT-2W-2W`$sim_df_power_sum,
+  within_cat_list$`CAT-2W-2B`$sim_df_power_sum,
+  within_cat_list$`CAT-2W-2W-2W`$sim_df_power_sum,
+  within_cat_list$`CAT-2W-2W-2W`$sim_df_power_sum,
+  within_cat_list$`CAT-2W-2W-2B`$sim_df_power_sum,
+  within_cat_list$`CAT-2W-2B-2B`$sim_df_power_sum
+) |> 
+  dplyr::filter(
+    n_rm == 65, target_vr %in% c(1, 2.1), target_skew == 0.5, name == "OLS", 
+    is.na(n_ratio) | n_ratio == 1.2
+  ) |> 
+  dplyr::group_by(design) |> 
+  dplyr::filter(!duplicated(paste0(b, "_", plot_group))) |> 
+  dplyr::select(-n_rm, -target_skew, -target_kurt, -n_ratio, -name, -plot_group) |> 
+  dplyr::arrange(b, target_vr) |> 
+  tidyr::pivot_wider(
+    id_cols = c(design, target_vr, n_het_pred), names_from = b, values_from = prop_sig
+  ) |> 
+  dplyr::arrange(n_het_pred, design) 
+
+```
+
+::: callout-note
+**False positives**
+
+-   Good control when no heteroscedastic predictors.
+
+-   Increased rate for single-predictor designs after adding heteroscedasticity, between 0.09 and 0.1 for 2W and 3W.
+
+**Power**
+
+-   Power extremely low across the board. The only designs that are reaching decent power are 2W and 3W at b = 0.5, with power between 0.76 and 0.79. Same designs are reaching up to 0.48 for b = 0.3 and up to 0.19 for b = 0.1
+
+-   Outside of these designs, max power is for design 2W-2W - 0.07 for b = 0.1, 0.23 for b = 0.3, 0.51 for b = 0.5. If designs are mixed (include a categorical predictor), power goes down. Same for when additional predictor is added. For 3-way designs, max power is 0.15 at b = 0.5 for 2W-2W-2W.
+:::
+
+### Bias
+
+#### Mean
+
+```{r}
+rbind(
+  within_cat_list$`CAT-2W`$sim_df_bias_sum,
+  within_cat_list$`CAT-3W`$sim_df_bias_sum,
+  within_cat_list$`CAT-2W-2W`$sim_df_bias_sum,
+  within_cat_list$`CAT-2W-2B`$sim_df_bias_sum,
+  within_cat_list$`CAT-2W-2W-2W`$sim_df_bias_sum,
+  within_cat_list$`CAT-2W-2W-2W`$sim_df_bias_sum,
+  within_cat_list$`CAT-2W-2W-2B`$sim_df_bias_sum,
+  within_cat_list$`CAT-2W-2B-2B`$sim_df_bias_sum
+) |> 
+  dplyr::filter(
+    n_rm == 65, 
+    target_vr %in% c(1, 2.1), 
+    target_skew == 0.5, 
+    name %in% c("OLS", "OLS estimate"), 
+    is.na(n_ratio) | n_ratio == 1.2, 
+    b == 0.1
+  ) |> 
+  dplyr::group_by(design) |> 
+  dplyr::filter(!duplicated(paste0(b, "_", plot_group))) |> 
+  dplyr::select(-n_rm, -target_skew, -target_kurt, -n_ratio, -name, -plot_group, -b) |> 
+  dplyr::arrange(target_vr) |> 
+  tidyr::pivot_wider(
+    id_cols = c(design), names_from = n_het_pred, values_from = mean_diff, names_prefix = "n_het_"
+  ) |> 
+  dplyr::arrange(design) 
+```
+
+::: callout-note
+Minimal bias when no heteroscedastic predictors. When heteroscedasticity is added, bias goes up, ranging from 0.12 for CAT-2W-2W to 0.17 for CAT-2W-2W-2B. Negative bias for 2-way designs.
+:::
+
+#### SD
+
+```{r}
+rbind(
+  within_cat_list$`CAT-2W`$sim_df_bias_sum,
+  within_cat_list$`CAT-3W`$sim_df_bias_sum,
+  within_cat_list$`CAT-2W-2W`$sim_df_bias_sum,
+  within_cat_list$`CAT-2W-2B`$sim_df_bias_sum,
+  within_cat_list$`CAT-2W-2W-2W`$sim_df_bias_sum,
+  within_cat_list$`CAT-2W-2W-2W`$sim_df_bias_sum,
+  within_cat_list$`CAT-2W-2W-2B`$sim_df_bias_sum,
+  within_cat_list$`CAT-2W-2B-2B`$sim_df_bias_sum
+) |> 
+  dplyr::filter(
+    n_rm == 65, 
+    target_vr %in% c(1, 2.1), 
+    target_skew == 0.5, 
+    name %in% c("OLS", "OLS estimate"), 
+    is.na(n_ratio) | n_ratio == 1.2, 
+    b == 0.1
+  ) |> 
+  dplyr::group_by(design) |> 
+  dplyr::filter(!duplicated(paste0(b, "_", plot_group))) |> 
+  dplyr::select(-n_rm, -target_skew, -target_kurt, -n_ratio, -name, -plot_group, -b) |> 
+  dplyr::arrange(target_vr) |> 
+  tidyr::pivot_wider(
+    id_cols = c(design), names_from = n_het_pred, values_from = sd_diff, names_prefix = "n_het_"
+  ) |> 
+  dplyr::arrange(design) 
+```
+
+::: callout-note
+The greatest difference in SD of estimates was driven by complexity of the design. For 2W, SD = 0.18, for 2W-2B-2B it was 1.02. Generally designs with between-subjects predictors had greater SD than their within-only counterparts. Adding a heteroscedastic predictor increased SD by additional 0.05 for all designs.
+:::
+
+### Coverage of CIs
+
+```{r}
+dplyr::left_join(
+  rbind(
+    within_cat_list$`CAT-2W`$sim_df_cover_sum,
+    within_cat_list$`CAT-3W`$sim_df_cover_sum
+  ) |> 
+    dplyr::filter(
+      n_rm == 65, 
+      target_vr %in% c(1, 2.1), 
+      target_skew == 0.5, 
+      name %in% c("OLS", "OLS estimate"), 
+      b == 0.1
+    ) |> 
+    dplyr::ungroup() |> 
+    dplyr::select(design, n_het_pred, prop_covered_original = prop_covered), 
+  
+  rbind(
+    within_cat_list$`CAT-2W`$sim_df_cover_shift_sum,
+    within_cat_list$`CAT-3W`$sim_df_cover_shift_sum
+  ) |> 
+    dplyr::filter(
+      n_rm == 65, 
+      target_vr %in% c(1, 2.1), 
+      target_skew == 0.5, 
+      name %in% c("OLS", "OLS estimate"), 
+      b == 0.1
+    ) |> 
+    dplyr::ungroup() |> 
+    dplyr::select(design, n_het_pred, prop_covered_shifted = prop_covered), 
+  
+  by = c("design", "n_het_pred")
+  
+)
+```
+
+::: callout-note
+Good cover when no heteroscedasticity is present. Low coverage of 0.91 when heteroscedasticity is added into the mix. Improved to nominal levels after adjusting for bias.
+:::
+
+### CI width
+
+```{r}
+rbind(
+  within_cat_list$`CAT-2W`$sim_df_ci_width_sum,
+  within_cat_list$`CAT-3W`$sim_df_ci_width_sum
+) |> 
+  dplyr::filter(
+    n_rm == 65, 
+    target_vr %in% c(1, 2.1), 
+    target_skew == 0.5, 
+    name %in% c("OLS", "OLS estimate"), 
+    b == 0.1
+  ) |> 
+  dplyr::ungroup() |> 
+  dplyr::select(design, n_het_pred, mean_width)
+```
+
+::: callout-note
+CI width goes up from 0.73 to 0.93 when heteroscedasticity is added.
+:::
+
+# Performance of robust estimators across conditions
+
+## Between/cross-sectional designs
+
+### Bootstrapping and HC4
+
+-   **Power:** often tracks OLS.
+
+    -   2B: advantages in power in light-tailed distributions with heteroscedasticity present (on-par only with HC4) \[2B: + 0.10, \]. Typical settings + 2 het - improvement of about \~0.10 (again, tracking HC4). High rates of false positives when het + skew (nearly +.15 compared to OLS - linked to bias.)
+
+        -   full HC4 tracking
+
+    -   3B: similar to 2B
+
+        -   full HC4 tracking
+
+    -   2B-2B: similar to 2B, advantage slightly higher - 0.43 compared 0.27 for OLS; High rates of false positives when het + skew (nearly +.20 compared to OLS for moderate skew, + 0.09 for high. tracks HC4)
+
+    -   2B-3B: +.10 power for light tailed and high het. Typical settings + 2 het improvement +0.05. With high heteroscedasticity - improved power but also worse control over false-positives (+0.10 tracks HC4).
+
+    -   3B-3B: + 0.08 power light tail and high het compared to OLS, tracks HC4. Typical settings + 2 het improvement +0.07. With high heteroscedasticity - improved power but also worse control over false-positives (+0.06 tracks HC4).
+
+    -   2B-2B-INT: Advantage of power +0.10 for light tailed with heteroscedasticity. No other notable advantages or disadvantages.
+
+        -   HC4: tracks.
+
+    -   3B-3B-INT: Advantage of power +0.06 for light tailed with heteroscedasticity. Same improvement when typical skew high het, nr = 1.3 or 2 (tracking het). High rates of false positives when high skew, high kurtosis 2 het (tracking HC4).
+
+    -   N-NUM: high skew, moderate or high het vp2 - lowest power
+
+-   **Bias:**
+
+    -   2B: No advantages, just tracks OLS
+
+    -   3B: No advantages
+
+    -   2B-2B: No advantages
+
+    -   2B-3B: No advantages
+
+    -   3B-3B: No advantages
+
+    -   2B-2B-INT: No advantages
+
+    -   3B-3B-INT: No advantages
+
+-   **Coverage**:
+
+    -   2B: Best coverage for light tailed distribution with moderate heteroscedasticity - holding closest to 0.95, while OLS is over-covering around \~0.97, but starts over-covering with high het. Especially true for small N. Moderate skewness: Best coverage at nr = 1.3, but worsens at nr = 2. Poor coverage when het combined with skew - for moderate levels - only reaching coverage of 0.75 with high N. Consistently worse than other estimators when NR = 2 and het present.
+
+        -   HC4: generally higher coverage, especially with heteroscedasticity present (though tending slightly to over-cover in light tails). No dips in coverage when moderate skew, but follows boot when het (and therefore bias) is added. When corrected for bias, holds 0.95 for any skew level.
+
+    -   3B: Lower coverage for moderate skew, no het (down to 0.93). Coverage drops to 0.80 for moderate skew and het + nr = 2 (worst of all estimators along with HC4). Small N: coverage down to 0.92 for high skew no het NR = 2.
+
+        -   HC4: moderate skew no het: good coverage, also high skew. Bias-shifted coverage is slightly more improved than for bootstrap.
+
+    -   2B-2B: coverage closest to 0.95 for moderate or larger N and no het + light tail, even with unequal N. Coverage starts dropping when when het + nr != 1. Typical conditions - worst coverage, down to 0.92 for large N (worse than all other estimators).
+
+        -   HC4: bootstrap tends to be worse than HC4 when NR != 1 and track it when NR = 1
+
+    -   2B-3B: light tail + moderate het - close to .95 while OLS under-covers. Down to 0.93 for small samples with typical skew and nr != 1. worsens with nr = 2. Typical conditions + 2het = worst coverage down to 0.8, even lower for high het (tracks HC4.). Low coverage 0.93 for high skew no het. Worse when nr != 1.
+
+    -   3B-3B: Down to 0.93 for small samples with typical skew and nr != 1. worsens with nr = 2. Low coverage 0.93 for high skew no het for small N. Worse when nr != 1.
+
+    -   2B-2B-INT: no advantages, but coverage drops when skew added. Worst coverage of all under typical conditions. Worsens with N ratio = 2 also 1.3 while high skew no het.
+
+        -   HC4: Slightly improved coverage compared to boot when het + skew with 1 heteroscedastic predictor (but worsens with 2). when bias corrected - it doesn't suffer the same loss of coverage as bootstrapping with small samples. Same for large skew - improved coverage.
+
+    -   3B-3B-INT: no advantages, but coverage drops when skew added. Worst coverage of all under typical conditions. Worsens with N ratio = 2 also 1.3 while high skew no het.
+
+-   **Bias-shifted coverage:**
+
+    -   2B: Slightly more accurate coverage for high skew and moderate het. Previous issues with low coverage fix, but no further advantage (light-tail advantage remains)
+
+    -   3B: same as 2B. Lower coverage for nr = 2 remains. For high skew and moderate het, nr = 1: holds .95 for moderate N or larger. Drops when nr = 2.
+
+    -   2B-2B: Same for light tailed distributions.
+
+    -   2B-3B: Typical conditions + 2het - coverage recovers, though still low for small samples (0.9) - keeps coverage close to 0.95 even with high heteroscedasticity. Coverage still worsens with nr = 2
+
+    -   3B-3B: ypical conditions + 2het - coverage recovers, though still low for small samples (0.9) - keeps coverage close to 0.95 even with high heteroscedasticity. Coverage still worsens with nr != 1.
+
+    -   2B-2B-INT: Issues from above remain (boot still worst), though attenuated
+
+    -   3B-3B-INT: Issues from above remain (boot still worst), though attenuated. Boot especially worst around 0.91 for all conditions with high skew.
+
+-   **CI-width:**
+
+    -   2B: Tracks HC4 and OLS closely. No advantage over the other estimators.
+
+    -   3B: same as 2B
+
+    -   2B-2B - Slightly lower with with light tailed distributions and moderate heteroscedasticity 0.36 compared to 0.42 OLS
+
+    -   2B-3B - Slightly lower for light tail + het - drop of 0.06, tracking HC4.
+
+    -   3B-3B - Slightly lower for light tail + het - drop of 0.06, tracking HC4.
+
+    -   2B-2B-INT: - Slightly lower for light tail + het - drop of 0.12.
+
+    -   3B-3B-INT: - Slightly lower for light tail + het - drop of 0.17.
+
+-   **Model errors:**
+
+    -   2B: No model errors recorded.
+
+    -   3B: No model errors recorded.
+
+    -   2B-2B: No model errors recorded.
+
+    -   2B-3B: No model errors recorded.
+
+    -   3B-3B: No model errors recorded.
+
+    -   2B-2B-INT: No model errors recorded.
+
+    -   3B-3B-INT: No model errors recorded.
+
+### MM and MM/KS
+
+-   **Power**
+
+    -   Generally power is going down for more complicated designs.
+
+    -   2B:
+
+        -   Both lower power with light tails. MM lowest when high VR, KS lowest when NR = 2
+
+        -   Moderate skew and het: Best control over false positives (related to bias), however power drops - for b - 0.3 and n = 296, drop of 0.12 compared to bootstrap, HC4 and OLS.
+
+        -   Track each other's performance when NR = 2.
+
+        -   High VR: MM best controls false positives, but also lowest power. in typical conditions, reaches 0.32, compared to 0.46 for KS, and 0.63 for the rest.
+
+        -   Both best power with high skew not het while keeping good control over false-positives. Issues as above arise when het combined with skew.
+
+    -   3B: Same as above
+
+    -   2B-2B: Same as above
+
+    -   3B-3B: Same as above
+
+    -   2B-2B-INT:
+
+        -   Moderate skew and het - good control over false positives and best power (though still only reaching 0.65 with large N and b = 0.65. KS slightly higher power, but also false positives above 0.1 (OLS and boot and HC4 much higher though).
+
+        -   high skew and high het - a shitshow. Controls false positives, but power rarely goes above 0.10.
+
+    -   3B-3B-INT:
+
+        -   Generally fewer benefits. Typical conditions, Nr = 1.3 or 2 and VR = 4.1 - best power and good control.
+
+        -   best performance high skew no het.
+
+        -   Decent when high skew moderate het
+
+        -   high skew and high het - a shitshow.
+
+-   Bias
+
+    -   2B:
+
+        -   Better control over bias when skew added, substantially better when heteroscedasticity combined with skewness. E.g. in typical conditions, other estimators have bias around \~0.13, KS has 0.06, MM has 0.05. Generally bias for MM lower.
+
+        -   Both lower SD (better efficiency) when high skew (and any level of het) - slightly higher SD in light distributions.
+
+    -   3B: Same
+
+    -   2B-2B: Same as above - in typical conditions, almost completely accounting for the bias.
+
+    -   2B-2B-INT: Same as above, though not able to completely counteract the bias.
+
+    -   3B-3B-INT: Same as above
+
+-   **Coverage**
+
+    -   2B:
+
+        -   KS down to \~0.92 for light tail and het NR = 1, but better when NR \> 1
+
+        -   Both best coverage when skew and het combined (typical): KS holding .90 MM at 0.93 while others dip below 0.80. Same for high het.
+
+        -   Both close to 0.95 when corrected for bias. KS over-covers at +0.97 when NR = 2.
+
+        -   KS low coverage when high skew and moderate or high het but NR = 1.
+
+    -   2B-2B:
+
+        -   Same as above. With combined het and skew (moderate) coverage of both is even closer to 0.95. Generally MM slightly closer to 0.95 of the two.
+
+        -   Rest is the same.
+
+    -   2B-2B-INT:
+
+        -   Coverage dropping below 0.90 when light tails and high heteroscedasticity.
+
+        -   Same for skew + het - controlling for bias and covering well. MM closer to 0.95
+
+        -   When corrected: KS dropping below 0.91 with high heteroscedasticity.
+
+#### Numeric predictors
+
+-   **Power:**
+
+    -   N-NUM:
+
+        -   Minor drop of power under light tailed distributions
+
+        -   Moderate or high Skewness + VP4: reduced power (e.g. 0.69 OLS compared 0.48 MM b = 0.1 n = 296) but also much better control over false-positive findings \[bias generating conditions\]. Reduction in power compared to other estimators is reduced with increasing number of predictors.
+
+        -   Best power and control over false positives under high skew and no het.
+
+        -   MM stellar performance under VP3
+
+        -   VP2 + skew: KS advantage for power but higher false positives. MM slightly lower power but better control over false positives.
+
+    -   2-NUM-INT
+
+        -   Also good power high skew and VP4 - reduction in power no longer there
+
+    -   3-NUM-INT
+
+        -   Same as above
+
+    -   N-NUM-CAT
+
+        -   VP2 + skew: KS advantage for power but higher false positives. MM slightly lower power but better control over false positives. Also true when additional categorical predictor has VR \> 1
+
+        -   VP3 - MM great
+
+        -   Moderate or high Skewness + VP4: reduced power (e.g. 0.69 OLS compared 0.48 MM b = 0.1 n = 296) but also much better control over false-positive findings \[bias generating conditions\]. Reduction in power compared to other estimators is reduced with increasing number of predictors.
+
+    -   N-NUM-CAT-INT
+
+        -   Same
+
+-   **Bias:**
+
+    -   N-NUM - More accurate estimation across a range of conditions, especially lower bias compared to others under VP4 - e.g. under moderate skew and high heteroscedasticity 0.09 vs 0.04, greater difference for large skew. MM-estimator generally better control.
+
+    -   N-NUM-INT - same
+
+    -   N-NUM-CAT - same
+
+    -   N-NUM-CAT-INT - same
+
+-   **Coverage:**
+
+    -   N-NUM
+
+        -   Light tails: KS: low coverage for VP2 \~0.92 (same when corrected) for moderate het, too high for VP3 \~0.98 (same when corrected). Fine for VP4. MM good coverage
+
+        -   Moderate skew: KS low for VP2, high for VP3. For VP4, dips to 0.93 when moderate het, MM holds 0.94 (others dip way too much due to bias)
+
+        -   High skew - both much better coverage compared to others, MM better compared to KS.
+
+        -   Both on-par with each other in bias generating conditions when coverage is corrected for bias.
+
+    -   2-NUM-INT
+
+        -   Light tails: Both low coverage with light tails VP2, KS has high too high coverage above 0.98 when VP3. VP4: KS good coverage, MM too low in small samples.
+
+        -   Moderate skew:
+
+            -   VP2: KS: consistently too low with VP2. MM higher coverage but outperformed by HC4 and Bootstrap.
+
+            -   VP3: KS consistently too high (OLS better). MM keeps good coverage for moderate samples but otherwise drops below nominal levels. MM considerable drop for high skew and 2 het pred - KS still holds too high, along with OLS (OLS still more accurate). KS has generally the best coverage when high skew + het.
+
+            -   VP4: Both keep good coverage, though MM drops to 0.92 for small samples.
+
+            -   consistent when corrected for bias
+
+    -   3-NUM-INT
+
+        -   Light tails: both too low coverage, KS too low for VP2. VP3: KS too high. MM too low for small samples. VP4 KS good, MM too low in small samples
+
+        -   otherwise same
+
+    -   N-NUM-CAT:
+
+        -   Light tails: When no het KS best at dealing with unequal samples. KS flops with VP2, worse than OLS. MM too low in small samples. VP3: too high coverage for KS. VP4 KS good, MM too low in small samples
+
+        -   Moderate skew: KS low for VP2, high for VP3. For VP4, dips to 0.93 when moderate het, MM holds 0.94 (others dip way too much due to bias)
+
+        -   Mostly same as N-NUM.
+
+    -   N-NUM-CAT-INT:
+
+        -   moderate skew:
+
+            -   VP3: MM is holding around 0.95 like a champ and dealing nicely with NR != 1. as long as no het in categorical predictor.
+
+            -   VP2: massive drop in coverage for KS when VP2 high het combined with VR = 4.1. MM still holding highest coverage, at only 0.83, compared to 0.60. This gets even worse is N ratio increases.
+
+            -   VP4: when combined high het + categorical het, the pattern flips and KS deals best when NR = 2.
+
+## Within/mixed designs
+
+### Bootstrapping and Robust Trimming
+
+-   **Power:**
+
+    -   2W: Light tails - OLS and boot better power. Moderate tails + het: trim/trimboot better control over false positives (at N = 65, 0.17 OLS vs 0.11 trimbs), but lower power 0.27 vs 0.17 (likely linked to worse control over bias). Slight power advantage for trimbs at high skew no het (large N 0.48 vs 0.39 at b = 0.3). Complete shitshow when het + high skew (massive false positives due to bias)
+
+    -   3W:
+
+        -   Light tails: bootstrap best in power, ols moderate, trimbs worst.
+
+        -   Moderate skew: same as above
+
+        -   high skew: same as above
+
+    -   2W-2W:
+
+        -   Light tails: ols/boot best, trimming slight advantage over trimboot
+
+        -   Moderate skew: no practical advantage of trimbs with moderate het. Slightly better power when high het, though advantage notable only at large effect size. Generally piss-poor power for interactions.
+
+        -   High skew: Same as above for no het - trimbs best power. Trimbs also small advantage to power with combined with het. high het + high skew is a very f\*cked.
+
+    -   2W-2B:
+
+        -   Light tails: OLS best. For all others - diffs in performance when NR \> 1, with trimboot worst, then trim, then boot.
+
+        -   moderate skew: slight advantage of trimbs when + het. Further advantage of trimming over others when combined with NR \> 1. Generally power extremely low.
+
+        -   high skew - similar pattern but power even lower overall.
+
+    -   2W-2W-2W:
+
+        -   Light: tails - same as above
+
+        -   add skew: no design has any meaningful advantage. Power overall tragically low.
+
+    -   2W-2W-2B:
+
+        -   Light tails - same - ols and boot best Bootstrap best when het (low or high) + nr = 2.
+
+        -   any skew + het + nr = 2 - either of the robs will have slight advantage in power over ols, but practically negligible.
+
+    -   2W-2B-2B:
+
+        -   Light tails; advantage of boot when NR \> 1 + het, otherwise OLS bossing it.
+
+        -   any skew + het + nr = 2 - either of the robs will have slight advantage in power over ols, but practically negligible.
+
+-   **Bias** (note: bootstrap in robust methods doesn't affect point-estimates so the difference is mainly between ols and trim)
+
+    -   2W: het + skew combined: can mitigate bias, but does not eliminate it completely. e.g. the lowest bias for ols (moderate conditions) is 0.16 at n = 65, and 0.13 for trim. Gets worse in more extreme conditions for both (though gap also rises). trimming slightly more efficient (lower SD) than OLS in high skew conditions, less efficient for light tails.
+
+    -   3W: same
+
+    -   2W-2W: same, though bias is negative
+
+    -   2W-2B: same
+
+    -   3-way: same, trim generally worse at correcting bias with small samples, but still better than OLS.
+
+-   **Coverage** (only available for 1-way designs):
+
+    -   2W:
+
+        -   Light tails: all estimators fine.
+
+        -   Skew no het: ols best apart from small samples where trimming is best
+
+        -   typical skew and typical het: coverage drops as a function of sample size for all but less so for trimbs - retain 0.88 at high N compared to ols/boot which drops to 0.82. More severe effects when higher skew and/or higher heteroscedasticity levels.
+
+        -   Corrected: bootstrap retains most stable coverage close to 0.95.
+
+    -   3W:
+
+        -   Same
+
+-   **Model errors**
+
+    -   None recorded.
+
+
+## Where the OLS Estimator Has Clear Advantage
+
+2B - light tailed distributions - better power as long as no heteroscedasticity (otherwise power drops and coverage too high) and slightly more efficient (minor)
+
+N-NUM(-CAT)(-INT)
+
+-   more efficient in light tailed
+
+-   slighly better power in light tailed and can deal with mild heteroscedasticity (as long as not VP3)
+
+RM designs - clearer advantage for light tails
+
+-   2W - light tailed distributions regardless of heteroscedasticity - power advantage at N = 0.65 and small b is 0.7 compared to 0.48 for trimbs. Also more efficient in these distributions. - all of this is on-par with bootstrapping
+
+-   3W - no more advantage - bootstrap better than OLS. Boot + OLS still more efficient.
+
+-   2W-2W - light tailed advantage
+
+-   2W-2B - light tailed advantage as long as VR = 1, otherwise bootstrap catches up.
+
+-   2W-2W-2W - light tailed advantage
+
+-   2W-2W-2B - light tailed advantage only up to moderate levels of het. Loses advantage at high levels of het.
+
+-   2W-2B-2B - light-tailed advantage but loses it with het + nr \> 1

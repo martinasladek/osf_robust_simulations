@@ -1,0 +1,207 @@
+## N-NUM-CAT: 1 continuous predictor(s)
+
+### Overall model fit
+
+```{r, fig.height=257.4, fig.width=10}
+power_overall_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_overall_sum |> dplyr::filter(n_cont_preds ==1))
+```
+
+
+
+### Power/false-positives
+
+```{r, fig.height=257.4, fig.width=10}
+power_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_power_sum |> dplyr::filter(n_cont_preds ==1))
+```
+
+
+
+### Bias 
+
+#### Mean bias 
+
+```{r, fig.height=257.4, fig.width=10}
+bias_mean_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_bias_sum |> dplyr::filter(n_cont_preds ==1))
+```
+
+
+
+#### SD bias 
+
+```{r, fig.height=257.4, fig.width=10}
+bias_sd_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_bias_sum |> dplyr::filter(n_cont_preds ==1))
+```
+
+
+
+### CI coverage
+
+```{r, fig.height=257.4, fig.width=10}
+cover_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_cover_sum |> dplyr::filter(n_cont_preds ==1))
+```
+
+
+
+### CI bias-shifted coverage
+
+```{r, fig.height=257.4, fig.width=10}
+cover_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_cover_shift_sum |> dplyr::filter(n_cont_preds ==1))
+```
+
+
+
+### CI width
+
+```{r, fig.height=257.4, fig.width=10}
+ci_width_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_ci_width_sum |> dplyr::filter(n_cont_preds ==1))
+```
+
+
+
+### Model errors
+
+```{r, fig.height=257.4, fig.width=10}
+model_errors_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_model_errors_sum |> dplyr::filter(n_cont_preds ==1))
+```
+
+
+
+
+## N-NUM-CAT: 3 continuous predictor(s)
+
+### Overall model fit
+
+```{r, fig.height=257.4, fig.width=10}
+power_overall_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_overall_sum |> dplyr::filter(n_cont_preds ==3))
+```
+
+
+
+### Power/false-positives
+
+```{r, fig.height=257.4, fig.width=10}
+power_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_power_sum |> dplyr::filter(n_cont_preds ==3))
+```
+
+
+
+### Bias 
+
+#### Mean bias 
+
+```{r, fig.height=257.4, fig.width=10}
+bias_mean_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_bias_sum |> dplyr::filter(n_cont_preds ==3))
+```
+
+
+
+#### SD bias 
+
+```{r, fig.height=257.4, fig.width=10}
+bias_sd_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_bias_sum |> dplyr::filter(n_cont_preds ==3))
+```
+
+
+
+### CI coverage
+
+```{r, fig.height=257.4, fig.width=10}
+cover_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_cover_sum |> dplyr::filter(n_cont_preds ==3))
+```
+
+
+
+### CI bias-shifted coverage
+
+```{r, fig.height=257.4, fig.width=10}
+cover_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_cover_shift_sum |> dplyr::filter(n_cont_preds ==3))
+```
+
+
+
+### CI width
+
+```{r, fig.height=257.4, fig.width=10}
+ci_width_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_ci_width_sum |> dplyr::filter(n_cont_preds ==3))
+```
+
+
+
+### Model errors
+
+```{r, fig.height=257.4, fig.width=10}
+model_errors_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_model_errors_sum |> dplyr::filter(n_cont_preds ==3))
+```
+
+
+
+
+## N-NUM-CAT: 8 continuous predictor(s)
+
+### Overall model fit
+
+```{r, fig.height=257.4, fig.width=10}
+power_overall_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_overall_sum |> dplyr::filter(n_cont_preds ==8))
+```
+
+
+
+### Power/false-positives
+
+```{r, fig.height=257.4, fig.width=10}
+power_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_power_sum |> dplyr::filter(n_cont_preds ==8))
+```
+
+
+
+### Bias 
+
+#### Mean bias 
+
+```{r, fig.height=257.4, fig.width=10}
+bias_mean_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_bias_sum |> dplyr::filter(n_cont_preds ==8))
+```
+
+
+
+#### SD bias 
+
+```{r, fig.height=257.4, fig.width=10}
+bias_sd_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_bias_sum |> dplyr::filter(n_cont_preds ==8))
+```
+
+
+
+### CI coverage
+
+```{r, fig.height=257.4, fig.width=10}
+cover_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_cover_sum |> dplyr::filter(n_cont_preds ==8))
+```
+
+
+
+### CI bias-shifted coverage
+
+```{r, fig.height=257.4, fig.width=10}
+cover_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_cover_shift_sum |> dplyr::filter(n_cont_preds ==8))
+```
+
+
+
+### CI width
+
+```{r, fig.height=257.4, fig.width=10}
+ci_width_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_ci_width_sum |> dplyr::filter(n_cont_preds ==8))
+```
+
+
+
+### Model errors
+
+```{r, fig.height=257.4, fig.width=10}
+model_errors_plot_between_cat(between_mixed_list[['N-NUM-CAT']]$sim_df_model_errors_sum |> dplyr::filter(n_cont_preds ==8))
+```
+
+
+
+

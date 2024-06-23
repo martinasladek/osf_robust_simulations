@@ -1,0 +1,33 @@
+---
+title: Simulation summaries 
+format: 
+  html:
+    toc: true
+    toc-depth: 5
+    toc-expand: 2
+    fig-align: center
+   # embed-resources: true
+    
+knitr: 
+  opts_chunk: 
+    echo: false
+    message: false
+    warning: false
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggiraph)
+
+source(here::here("scripts/generate_within.R"))
+```
+
+
+# Within- or Mixed- measures designs
+
+```{r child = "../summary_qmds/within_cat.qmd"}
+```
+
+
+
