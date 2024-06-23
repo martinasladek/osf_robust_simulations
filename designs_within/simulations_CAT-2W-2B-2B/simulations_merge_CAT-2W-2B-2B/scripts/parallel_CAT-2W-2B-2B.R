@@ -1,0 +1,383 @@
+source("scripts/parallel_setup_script.R")
+
+
+start_pop_i = 15
+
+# CAT-2W-2B-2B ------------------------------------------------------------
+
+cat_2w2b2b <- readr::read_csv("data/simulation_grids/CAT-2W-2B-2B.csv")
+
+cat_2w2b2b_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2W-2B-2B", 
+    combo_id = cat_2w2b2b$combo_id,
+    b, n_rm, 
+    n_ratio = n_ratio_rm, 
+    iter = start_iter:n_iter
+  ), 
+  cat_2w2b2b |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::filter(
+    b == 0
+  ) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+
+generate_cat2w2b2b <- function(
+    n = 100000, 
+    b, 
+    b_shift_1 = 0, 
+    b_shift_2 = 0, 
+    sigma = 1, 
+    sigma_shift_1, 
+    sigma_shift_2,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    within = list(
+      factor_1 = c("1", "2")
+    ), 
+    between = list(gb2 = c(".", ".."), gb1 = c("a", "b")), 
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      `1` = dplyr::case_when(
+        gb1 ==  "a" & gb2 == "." ~ transform_norm(raw_var = `1`, mu = 0, nu = nu, tau = tau, sigma = sigma),
+        gb1 ==  "a" & gb2 == ".." ~ transform_norm(raw_var = `1`, mu = 0, nu = nu, tau = tau, sigma = sigma) + b,
+        gb1 ==  "b" & gb2 == "." ~ transform_norm(raw_var = `1`, mu = 0, nu = nu, tau = tau, sigma = sigma) + b,
+        gb1 ==  "b" & gb2 == ".." ~ transform_norm(raw_var = `1`, mu = 0, nu = nu, tau = tau, 
+                                                   sigma = sigma + sigma_shift_1) + 3*b + b_shift_1,
+      ), 
+      `2` = dplyr::case_when(
+        gb1 ==  "a" & gb2 == "." ~ transform_norm(raw_var = `2`, mu = 0, nu = nu, tau = tau, sigma = sigma) + b,
+        gb1 ==  "a" & gb2 == ".." ~ transform_norm(raw_var = `2`, mu = 0, nu = nu, tau = tau, sigma = sigma) + 3*b,
+        gb1 ==  "b" & gb2 == "." ~ transform_norm(raw_var = `2`, mu = 0, nu = nu, tau = tau, sigma = sigma) + 3*b,
+        gb1 ==  "b" & gb2 == ".." ~ transform_norm(raw_var = `2`, mu = 0, nu = nu, tau = tau, 
+                                                   sigma = sigma + sigma_shift_2) + 7*b + b_shift_2,
+      )
+    )
+  
+  return(transformed_df) 
+}
+
+bbwtrim_wrapper <- function(J, K, L, bsam, tr){
+  warn_increase <- 0
+  warn_message <- NULL
+  
+  bbwtrim_result <- withCallingHandlers(
+    
+    WRS::bbwtrim(J, K, L, bsam, tr = tr),
+    
+    warning = function(w) {
+      warn_increase <<- 1
+      warn_message <<- paste0(w)
+    }
+  )
+  
+  bbwtrim_result$warn_increase <- warn_increase
+  bbwtrim_result$warn_message <- warn_message
+  
+  return(bbwtrim_result)
+}
+
+bbwtrim_error_wrapper <- function(J, K, L, bsam, tr){
+  tryCatch(
+    bbwtrim_wrapper(J, K, L, bsam, tr) |> suppressWarnings(),
+    error = function(e) {
+      paste0(e)
+    }
+  )
+}
+
+
+bbwtrimbt_mod <- function (J, K, L, x, tr = 0.2, JKL = J * K * L, con = 0, alpha = 0.05, 
+                           grp = c(1:JKL), nboot = 599, SEED = FALSE, ...) 
+{
+  
+  if (is.data.frame(x)) 
+    data = as.matrix(x)
+  if (is.matrix(x)) {
+    y <- list()
+    for (j in 1:ncol(x)) y[[j]] <- x[, j]
+    x <- y
+  }
+  p <- J * K * L
+  if (p > length(x)) 
+    stop("JKL is less than the Number of groups")
+  JK = J * K
+  v <- matrix(0, p, p)
+  data <- list()
+  xx = list()
+  for (j in 1:length(x)) {
+    data[[j]] <- x[[grp[j]]]
+    xx[[j]] = x[[grp[j]]]
+    data[[j]] = data[[j]] - mean(data[[j]], tr = tr)
+  }
+  test.stat = bbwtrim(J, K, L, xx, tr = tr) |> suppressWarnings()
+  x <- data
+  if (SEED) 
+    set.seed(2)
+  testA = NA
+  testB = NA
+  testC = NA
+  testAB = NA
+  testAC = NA
+  testBC = NA
+  testABC = NA
+  bsam = list()
+  bdat = list()
+  
+  warn_count = 0
+  warn_vec <- NULL
+  error_count = 0
+  error_vec <- NULL
+  
+  aboot = NA
+  bboot = NA
+  cboot = NA
+  abboot = NA
+  acboot = NA
+  bcboot = NA
+  abcboot = NA
+  nvec = NA
+  for (j in 1:JK) {
+    nvec[j] = length(x[[j]])
+    for (ib in 1:nboot) {
+      ilow <- 1 - L
+      iup = 0
+      for (j in 1:JK) {
+        ilow <- ilow + L
+        iup = iup + L
+        nv = length(x[[ilow]])
+        bdat[[j]] = sample(nv, size = nv, replace = TRUE)
+        for (k in ilow:iup) {
+          bsam[[k]] = x[[k]][bdat[[j]]]
+        }
+      }
+      temp = bbwtrim_error_wrapper(J, K, L, bsam, tr = tr) 
+      
+      if(is.character(temp)){
+        
+        aboot[ib] = NA
+        bboot[ib] = NA
+        cboot[ib] = NA
+        acboot[ib] = NA
+        bcboot[ib] = NA
+        abboot[ib] = NA
+        abcboot[ib] = NA
+        
+        error_count = error_count + 1
+        error_vec <- c(error_vec, temp)
+        
+      } else {
+        
+        warn_count = c(warn_count, temp$warn_increase)
+        warn_vec = c(warn_vec, temp$warn_message)
+        
+        aboot[ib] = temp$Qa
+        bboot[ib] = temp$Qb
+        cboot[ib] = temp$Qc
+        acboot[ib] = temp$Qac
+        bcboot[ib] = temp$Qbc
+        abboot[ib] = temp$Qab
+        abcboot[ib] = temp$Qabc
+        
+      }
+    }
+  }
+  pbA = NA
+  pbB = NA
+  pbC = NA
+  pbAB = NA
+  pbAC = NA
+  pbBC = NA
+  pbABC = NA
+  pbA = mean(test.stat$Qa[1, 1] < aboot, na.rm = TRUE)
+  pbB = mean(test.stat$Qb[1, 1] < bboot, na.rm = TRUE)
+  pbC = mean(test.stat$Qc[1, 1] < cboot, na.rm = TRUE)
+  pbAB = mean(test.stat$Qab[1, 1] < abboot, na.rm = TRUE)
+  pbAC = mean(test.stat$Qac[1, 1] < acboot, na.rm = TRUE)
+  pbBC = mean(test.stat$Qbc[1, 1] < bcboot, na.rm = TRUE)
+  pbABC = mean(test.stat$Qabc[1, 1] < abcboot, na.rm = TRUE)
+  list(p.value.A = pbA, p.value.B = pbB, p.value.C = pbC, 
+       p.value.AB = pbAB, p.value.AC = pbAC, p.value.BC = pbBC, 
+       p.value.ABC = pbABC,
+       warn_count = sum(warn_count), 
+       warn_message = ifelse(is.null(warn_vec), NA_character_, paste0(unique(warn_vec), sep = ";")), 
+       error_count = error_count, 
+       error_message = ifelse(is.null(error_vec), NA_character_, paste0(unique(error_vec), sep = ";"))
+  )
+}
+
+## sample fit and save -------------------------------------------------------
+cat_2w2b2b_sfs <- function(
+   # pop_i_gb1_a, 
+   # pop_i_gb1_b, 
+    n_rm, n_ratio){
+  
+  n1n2 <- sample_n_from_ratio_rm(n_rm = n_rm, n_ratio = n_ratio)
+  # n1n2 <- sample_n_from_ratio_rm(n_rm = 18, n_ratio = 2)
+  
+  weight_col <- paste0("n_ratio_w_", n_ratio)
+  #weight_col <- paste0("n_ratio_w_", 2)
+  
+  sample_ij <- dplyr::bind_rows(
+    pop_i_gb1_a |> dplyr::slice_sample(n = n1n2[["n1"]], weight_by = (!!sym(weight_col))), 
+    pop_i_gb1_b |> dplyr::slice_sample(n = n1n2[["n2"]], weight_by = (!!sym(weight_col))) 
+  )
+  
+  n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+  
+  # must sample at least 2 for each cell and all groups must be represented
+  # in the cell grid 
+  while (any(n_cell_count < 2) | length(n_cell_count) < 4) {
+    
+    sample_ij <- dplyr::bind_rows(
+      pop_i_gb1_a |> dplyr::slice_sample(n = n1n2[["n1"]], weight_by = (!!sym(weight_col))), 
+      pop_i_gb1_b |> dplyr::slice_sample(n = n1n2[["n2"]], weight_by = (!!sym(weight_col))) 
+    )
+    
+    n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+    
+  }
+  
+  ## fit ols model 
+  
+  sample_ij_long <- sample_ij |> 
+    dplyr::select(!dplyr::contains("n_ratio")) |> 
+    tidyr::pivot_longer(-c(id, gb1, gb2), names_to = "gw", values_to = "y") 
+  
+  
+  afex_summary_ij <- afex_nc_gg_summary("y ~ gw*gb1*gb2 + (gw|id)", data = sample_ij_long) |>
+    dplyr::arrange(afex_nc_term)
+  
+  
+  wrs_df <- list(
+    dplyr::filter(sample_ij_long, gb1 == "a", gb2 == ".",  gw == "1")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "a", gb2 == ".",  gw == "2")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "a", gb2 == "..", gw == "1")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "a", gb2 == "..", gw == "2")$y,
+    
+    dplyr::filter(sample_ij_long, gb1 == "b", gb2 == ".",  gw == "1")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "b", gb2 == ".",  gw == "2")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "b", gb2 == "..", gw == "1")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "b", gb2 == "..", gw == "2")$y
+  )
+  
+  if(any(n_cell_count < 12)){nboot = 1000
+  } else{nboot = 599}
+  
+  rob_trim_mod_ij <- WRS::bbwtrim(2,2,2, wrs_df, tr = 0.2) 
+  rob_trim_summary_ij <- tibble::tibble(
+    rob_trim_term = names(rob_trim_mod_ij[grep(pattern = "p.value",  names(rob_trim_mod_ij), invert = TRUE)]),
+    rob_trim_statistic = unlist(rob_trim_mod_ij[grep(pattern = "p.value",  names(rob_trim_mod_ij), invert = TRUE)]), 
+    rob_trim_p = unlist(rob_trim_mod_ij[grep(pattern = "p.value",  names(rob_trim_mod_ij), invert = FALSE)])
+  ) |> dplyr::arrange(rob_trim_term)
+  
+  rob_boot_mod_ij <- bbwtrimbt_mod(2,2,2, wrs_df, tr = 0, SEED = FALSE, nboot = nboot) |> suppressWarnings()
+  rob_boot_summary_ij <- tibble::tibble(
+    rob_boot_term = names(rob_boot_mod_ij[grep(pattern = "p.value",  names(rob_boot_mod_ij), invert = FALSE)]),
+    rob_boot_p = unlist(rob_boot_mod_ij[grep(pattern = "p.value",  names(rob_boot_mod_ij), invert = FALSE)]), 
+    rob_boot_warn_count = unlist(rob_boot_mod_ij[grep(pattern = "warn_count",  names(rob_boot_mod_ij), invert = FALSE)]), 
+    rob_boot_warn_message = unlist(rob_boot_mod_ij[grep(pattern = "warn_message",  names(rob_boot_mod_ij), invert = FALSE)]),
+    rob_boot_error_count = unlist(rob_boot_mod_ij[grep(pattern = "error_count",  names(rob_boot_mod_ij), invert = FALSE)]), 
+    rob_boot_error_message = unlist(rob_boot_mod_ij[grep(pattern = "error_message",  names(rob_boot_mod_ij), invert = FALSE)])
+  ) |> dplyr::arrange(rob_boot_term)
+  
+  rob_trimboot_mod_ij <- bbwtrimbt_mod(2,2,2, wrs_df, tr = 0.2, SEED = FALSE, nboot = nboot) |> suppressWarnings()
+  rob_trimboot_summary_ij <- tibble::tibble(
+    rob_trimboot_term = names(rob_trimboot_mod_ij[grep(pattern = "p.value",  names(rob_trimboot_mod_ij), invert = FALSE)]),
+    rob_trimboot_p = unlist(rob_trimboot_mod_ij[grep(pattern = "p.value",  names(rob_trimboot_mod_ij), invert = FALSE)]), 
+    rob_trimboot_warn_count = unlist(rob_trimboot_mod_ij[grep(pattern = "warn_count",  names(rob_trimboot_mod_ij), invert = FALSE)]), 
+    rob_trimboot_warn_message = unlist(rob_trimboot_mod_ij[grep(pattern = "warn_message",  names(rob_trimboot_mod_ij), invert = FALSE)]),
+    rob_trimboot_error_count = unlist(rob_trimboot_mod_ij[grep(pattern = "error_count",  names(rob_trimboot_mod_ij), invert = FALSE)]), 
+    rob_trimboot_error_message = unlist(rob_trimboot_mod_ij[grep(pattern = "error_message",  names(rob_trimboot_mod_ij), invert = FALSE)])
+  ) |> dplyr::arrange(rob_trimboot_term)
+  
+  afex_int_b <- suppressWarnings(WRS::bbwmcp(2,2,2, wrs_df, tr = 0, nboot = 2)$Fac.ABC[2])
+  rob_trim_int_b <- suppressWarnings(WRS::bbwmcp(2,2,2, wrs_df, tr = 0.2, nboot = 2)$Fac.ABC[2])
+  
+  dplyr::bind_cols(
+    afex_summary_ij, rob_trim_summary_ij, rob_boot_summary_ij, rob_trimboot_summary_ij, 
+    afex_int_b = afex_int_b,rob_trim_int_b = rob_trim_int_b
+  )
+  
+  
+}
+ 
+
+## Iterate -----------------------------------------------------------------
+
+set.seed(global_seed)
+
+cat_2w2b2b_unique_populations <- cat_2w2b2b_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2w2b2b_n_pop <- nrow(cat_2w2b2b_unique_populations)
+
+for(i in start_pop_i:cat_2w2b2b_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2w2b2b_n_pop)
+  
+  pop_row_i <- cat_2w2b2b_unique_populations[i, ]
+  
+  grid_i <- cat_2w2b2b_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  n_ratios <- sort(unique(grid_i$n_ratio))
+  
+  pop_i <- generate_cat2w2b2b(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift_1 = pop_row_i$sigma_shift_1, sigma_shift_2 = pop_row_i$sigma_shift_2, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  pop_i[[paste0("n_ratio_w_", n_ratios[1])]] <- ifelse(pop_i$gb2 == ".." , n_ratios[1], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[2])]] <- ifelse(pop_i$gb2 == ".." , n_ratios[2], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[3])]] <- ifelse(pop_i$gb2 == ".." , n_ratios[3], 1)
+  
+  pop_i_gb1_a <- pop_i |> dplyr::filter(gb1 == "a")
+  pop_i_gb1_b <- pop_i |> dplyr::filter(gb1 == "b")
+  
+  ## start furrr level: sample fit and save
+  
+  tictoc::tic()
+  future::plan(multisession)
+  
+  furrr_seed <- ifelse((start_iter == 1 & n_iter == 500), global_seed-1, global_seed)
+  
+  sim_results = furrr::future_pmap(
+    .l = grid_i |> dplyr::select(n_rm, n_ratio), 
+    .f = cat_2w2b2b_sfs,
+    .options = furrr::furrr_options(seed = furrr_seed),
+    .progress = TRUE
+  )
+  
+  grid_i <- dplyr::bind_cols(
+    grid_i,
+    tibble::tibble(sim_results)
+  )|> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, i = paste0(i, "_", start_iter, "-", n_iter), pop_row_i$population_id)
+  tictoc::toc()
+  
+  rm(pop_i_gb1_a)
+  rm(pop_i_gb1_b)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+
