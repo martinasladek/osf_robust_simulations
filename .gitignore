@@ -1,0 +1,7 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.DS_Store
+**/simulation_exports/*.rds
+**/simulation_exports/*.RDS
