@@ -1,0 +1,1213 @@
+---
+title: simulation processing
+---
+
+# Setup 
+
+## Packages and functions
+
+```{r}
+library(dplyr, warn.conflicts = FALSE)
+library(ggplot2)
+library(purrr)
+
+text_as_fun <- function(function_string){
+  eval(parse(text = function_string))
+}
+
+options(dplyr.summarise.inform = FALSE)
+
+data_identifier = "CAT"
+
+dirs <- grep("child|parent", list.dirs("../..", recursive = FALSE), value = TRUE)
+
+file_names <- list.files(paste0(dirs, "/data/simulation_exports/"), pattern = data_identifier)
+file_paths <- list.files(paste0(dirs, "/data/simulation_exports/"), pattern = data_identifier, full.names = TRUE)
+```
+
+```{r}
+overall_power_plot <- function(df){
+  df |> 
+    ggplot2::ggplot(aes(x = n_bw, y = prop_sig, linetype = het, colour = het)) + 
+    geom_line() + 
+    scale_x_continuous(breaks = unique(df$n_bw)) + 
+    facet_grid(
+      rows = vars(plot_group), cols = vars(b)) + 
+    scale_colour_viridis_d() + 
+    theme_minimal() +
+    theme(
+      strip.text.y.right = element_text(angle = 0)
+    )
+}
+```
+
+Define variables for identifying unique cells 
+
+```{r}
+cell_ids <- c("design", "b", "n_bw", "n_ratio", "n_cont_preds", "n_cat_preds", "target_skew", "target_kurt", 
+              "het_shape", "target_het", "target_vr", "n_het_pred")
+```
+
+## 1-NUM
+
+```{r}
+file_names_1_num <- grep("cont_preds_1", file_names, value = TRUE)
+file_paths_1_num <- grep("cont_preds_1", file_paths, value = TRUE)
+
+sim_list <- purrr::map(
+  .x = file_paths_1_num, 
+  .f = readRDS
+)
+```
+
+### Pre-processing
+
+Keep only terms of interest: 
+
+```{r}
+sim_list <- purrr::map(
+  .x = sim_list, 
+  .f = \(x) x |> dplyr::filter(lm_term == "x1")
+)
+```
+
+Merge into a df:
+
+```{r}
+sim_df <- purrr::reduce(
+  .x = sim_list, 
+  .f = dplyr::bind_rows
+) |> 
+  dplyr::filter(n_ratio != 1.5)
+```
+
+Remove the list to free-up memory: 
+
+```{r}
+rm(sim_list)
+gc()
+```
+
+
+
+### Summaries 
+
+#### Overall power/false-positives
+
+
+```{r}
+power_overall_1_num <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("overall_p.value")) |> 
+  tidyr::pivot_longer(
+    cols = -all_of(cell_ids)
+  ) |>  
+  dplyr::mutate(
+    is_sig = value < 0.05
+  ) |> 
+  dplyr::group_by(across(c(all_of(cell_ids)))) |> 
+  dplyr::summarise(
+    prop_sig = sum(is_sig, na.rm = TRUE)/length(is_sig)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n", 
+      "Skewness = ", target_skew, "\n", "Kurtosis = ", target_kurt, "\n",
+      "N ratio = ", n_ratio
+    ), 
+    het = paste0(
+      "n_het_pred = ", n_het_pred, 
+      "; VR = ", target_vr, 
+      "; het_shape = ", het_shape, 
+      "; target_het = ", target_het
+    )
+  )
+
+sim_df_overall_sum <- power_overall_1_num
+```
+
+
+```{r fig.width=10, fig.height=20, eval = FALSE}
+power_overall_1_num |> 
+  dplyr::filter(het_shape %in% c("vp1",  "vp2")) |> 
+  overall_power_plot()
+```
+
+```{r fig.width=10, fig.height=20, eval = FALSE}
+power_overall_1_num |> 
+  dplyr::filter(het_shape %in% c("vp1",  "vp3")) |> 
+  overall_power_plot()
+```
+
+```{r fig.width=10, fig.height=20, eval = FALSE}
+power_overall_1_num |> 
+  dplyr::filter(het_shape %in% c("vp1",  "vp4")) |> 
+  overall_power_plot()
+```
+
+
+#### Power/false positives 
+
+```{r}
+power_pred_1_num <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("p.value"), -lm_overall_p.value) |> 
+  tidyr::pivot_longer(
+    cols = -c(all_of(cell_ids))
+  ) |> 
+  dplyr::mutate(
+    is_sig = value < 0.05
+  ) |> 
+  dplyr::filter(!is.na(is_sig)) |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    prop_sig = sum(is_sig, na.rm = TRUE)/length(is_sig)
+  )  |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds,  "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    )
+  )
+
+sim_df_power_sum <- power_pred_1_num
+```
+
+```{r fig.width=10, fig.height=200, eval=FALSE}
+power_pred_1_num |> 
+  ggplot2::ggplot(aes(x = n_bw, y = prop_sig, linetype = name, colour = name)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = unique(power_pred_1_num$n_bw)) + 
+  facet_grid(
+    rows = vars(plot_group), cols = vars(b)) + 
+  scale_colour_viridis_d() + 
+  theme_minimal() +
+  theme(
+    strip.text.y.right = element_text(angle = 0)
+  )
+```
+
+#### Coverage of CIs
+
+```{r}
+cover_pred_1_num_df <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("conf")) |> 
+  dplyr::mutate(row_id = 1:length(b)) |> 
+  tidyr::pivot_longer(
+    cols = -c(all_of(cell_ids), row_id)
+  ) |> 
+  dplyr::mutate(
+    ci = ifelse(stringr::str_detect(name, "low"), "lower", "upper"), 
+    name = stringr::str_remove_all(name, "_conf.low") |> 
+      stringr::str_remove_all("_conf.high")
+  ) |> 
+  tidyr::pivot_wider(
+    id_cols = c(all_of(cell_ids), name, row_id), 
+    names_from = ci, values_from = value
+  ) |> 
+  dplyr::mutate(
+    is_covered = dplyr::between(b, lower, upper)
+  ) |> 
+  dplyr::filter(!is.na(is_covered)) 
+
+cover_pred_1_num <- cover_pred_1_num_df |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    prop_covered = sum(is_covered, na.rm = TRUE)/length(is_covered)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    )
+  )
+
+sim_df_cover_sum <- cover_pred_1_num
+```
+
+```{r fig.width=10, fig.height=200, eval=FALSE}
+cover_pred_1_num |> 
+  ggplot2::ggplot(aes(x = n_bw, y = prop_covered, linetype = name, colour = name)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = unique(cover_pred_1_num$n_bw)) + 
+  facet_grid(
+    rows = vars(plot_group), cols = vars(b)) + 
+  scale_colour_viridis_d() + 
+  theme_minimal() +
+  theme(
+    strip.text.y.right = element_text(angle = 0)
+  )
+```
+
+#### CI width 
+
+```{r}
+ci_width_pred_1_num_sum <- cover_pred_1_num_df |> 
+  dplyr::mutate(
+    ci_width  = upper - lower
+  ) |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    mean_width = mean(ci_width, na.rm = TRUE)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    ), 
+    name = factor(name, labels = c("OLS", "Bootstrap", "HC4", "MM/KS", "MM"))
+  )
+
+sim_df_ci_width_sum <- ci_width_pred_1_num_sum
+```
+
+#### Bias in beta 
+
+```{r}
+bias_pred_1_num <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("estimate")) |> 
+  tidyr::pivot_longer(-all_of(cell_ids)) |> 
+  dplyr::mutate(
+    b_diff = value - b
+  )  |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    mean_diff = mean(b_diff, na.rm = TRUE), 
+    sd_diff = sd(b_diff, na.rm = TRUE)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    ),
+    name = factor(name, labels = c("OLS", "Bootstrap", "MM/KS", "MM"))
+  )
+
+sim_df_bias_sum <- bias_pred_1_num
+```
+
+```{r fig.width=10, fig.height=200, eval=FALSE}
+bias_pred_1_num |> 
+  ggplot2::ggplot(aes(x = n_bw, y = mean_diff, linetype = name, colour = name)) +
+  geom_point() + 
+  geom_line() + 
+  scale_x_continuous(breaks = unique(bias_pred_1_num$n_bw)) + 
+  facet_grid(
+    rows = vars(plot_group), cols = vars(b), 
+    scales = "free_y"
+    ) + 
+  scale_colour_viridis_d() +
+  theme_minimal() +
+  theme(
+    strip.text.y.right = element_text(angle = 0)
+  )
+```
+
+##### Shifted coverage
+
+```{r}
+cover_shift_pred_1_num_df <- cover_pred_1_num_df |> 
+  dplyr::mutate(name_merge = factor(name, labels = c("OLS", "Bootstrap", "OLS", "MM/KS", "MM"))) |> 
+  dplyr::left_join(
+    bias_pred_1_num |> 
+      dplyr::mutate(name_merge = name) |> 
+      dplyr::select(-name, -plot_group), 
+    by = c(all_of(cell_ids), "name_merge")
+  ) |> 
+  dplyr::mutate(
+    lower_shifted = lower - mean_diff, 
+    upper_shifted = upper - mean_diff
+    ) |> 
+  dplyr::mutate(
+    is_covered = dplyr::between(b, lower_shifted, upper_shifted)
+  ) |> 
+  dplyr::filter(!is.na(lower_shifted))
+```
+
+
+```{r}
+cover_shift_pred_1_num_sum <- cover_shift_pred_1_num_df |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    prop_covered = sum(is_covered, na.rm = TRUE)/length(is_covered)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    ), 
+    name = factor(name, labels = c("OLS", "Bootstrap", "HC4", "MM/KS", "MM"))
+  )
+sim_df_cover_shift_sum <- cover_shift_pred_1_num_sum
+```
+
+```{r fig.height=200, fig.width=10, fig.align='center'}
+cover_shift_pred_1_num_plot <- cover_shift_pred_1_num_sum |> 
+  ggplot2::ggplot(aes(x = n_bw, y = prop_covered, linetype = name, colour = name)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = unique(cover_shift_pred_1_num_sum$n_bw)) + 
+  facet_grid(
+    rows = vars(plot_group), cols = vars(b)) + 
+  scale_colour_viridis_d() +
+  theme_minimal() +
+  theme(
+    strip.text.y.right = element_text(angle = 0)
+  )
+```
+
+#### Model errors 
+
+```{r}
+model_errors_pred_1_num_sum <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("p.value")) |> 
+  tidyr::pivot_longer(-all_of(cell_ids)) |> 
+  dplyr::filter(name != "lm_overall_p.value") |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    n_fail = sum(is.na(value))/length(value)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    ), 
+  )
+
+sim_df_model_errors_sum <- model_errors_pred_1_num_sum
+```
+
+```{r}
+sum_exports <- ls(pattern = "sum") |> grep(x = _, pattern = "pred_|exports", value = TRUE, invert = TRUE)
+
+sim_export <- purrr::map(
+  .x = sum_exports,
+  .f = text_as_fun
+)
+
+names(sim_export) <- sum_exports
+
+saveRDS(
+  sim_export,
+  paste0(
+    "../data/processed_data/sim_export_", "N-NUM-CAT_preds_1", ".rds"),
+)
+```
+
+
+## 3-NUM
+
+```{r}
+rm(sim_df)
+gc()
+
+file_names_3_num <- grep("cont_preds_3", file_names, value = TRUE)
+file_paths_3_num <- grep("cont_preds_3", file_paths, value = TRUE)
+
+sim_list <- purrr::map(
+  .x = file_paths_3_num, 
+  .f = readRDS
+)
+```
+
+### Pre-processing
+
+Keep only terms of interest: 
+
+```{r}
+sim_list <- purrr::map(
+  .x = sim_list, 
+  .f = \(x) x |> dplyr::filter(lm_term == "x1")
+)
+```
+
+Merge into a df:
+
+```{r}
+sim_df <- purrr::reduce(
+  .x = sim_list, 
+  .f = dplyr::bind_rows
+)  |> 
+  dplyr::filter(n_ratio != 1.5)
+```
+
+Remove the list to free-up memory: 
+
+```{r}
+rm(sim_list)
+gc()
+```
+
+
+
+### Summaries 
+
+#### Overall power/false-positives
+
+
+```{r}
+power_overall_3_num <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("overall_p.value")) |> 
+  tidyr::pivot_longer(
+    cols = -all_of(cell_ids)
+  ) |>  
+  dplyr::mutate(
+    is_sig = value < 0.05
+  ) |> 
+  dplyr::group_by(across(c(all_of(cell_ids)))) |> 
+  dplyr::summarise(
+    prop_sig = sum(is_sig, na.rm = TRUE)/length(is_sig)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n", 
+      "Skewness = ", target_skew, "\n", "Kurtosis = ", target_kurt, "\n",
+      "N ratio = ", n_ratio
+    ), 
+    het = paste0(
+      "n_het_pred = ", n_het_pred, 
+      "; VR = ", target_vr, 
+      "; het_shape = ", het_shape, 
+      "; target_het = ", target_het
+    )
+  )
+
+sim_df_overall_sum <- power_overall_3_num
+```
+
+
+```{r fig.width=10, fig.height=20, eval = FALSE}
+power_overall_3_num |> 
+  dplyr::filter(het_shape %in% c("vp1",  "vp2")) |> 
+  overall_power_plot()
+```
+
+```{r fig.width=10, fig.height=20, eval = FALSE}
+power_overall_3_num |> 
+  dplyr::filter(het_shape %in% c("vp1",  "vp3")) |> 
+  overall_power_plot()
+```
+
+```{r fig.width=10, fig.height=20, eval = FALSE}
+power_overall_3_num |> 
+  dplyr::filter(het_shape %in% c("vp1",  "vp4")) |> 
+  overall_power_plot()
+```
+
+
+#### Power/false positives 
+
+```{r}
+power_pred_3_num <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("p.value"), -lm_overall_p.value) |> 
+  tidyr::pivot_longer(
+    cols = -c(all_of(cell_ids))
+  ) |> 
+  dplyr::mutate(
+    is_sig = value < 0.05
+  ) |> 
+  dplyr::filter(!is.na(is_sig)) |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    prop_sig = sum(is_sig, na.rm = TRUE)/length(is_sig)
+  )  |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds,  "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    )
+  )
+
+sim_df_power_sum <- power_pred_3_num
+```
+
+```{r fig.width=10, fig.height=200, eval=FALSE}
+power_pred_3_num |> 
+  ggplot2::ggplot(aes(x = n_bw, y = prop_sig, linetype = name, colour = name)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = unique(power_pred_3_num$n_bw)) + 
+  facet_grid(
+    rows = vars(plot_group), cols = vars(b)) + 
+  scale_colour_viridis_d() + 
+  theme_minimal() +
+  theme(
+    strip.text.y.right = element_text(angle = 0)
+  )
+```
+
+#### Coverage of CIs
+
+```{r}
+cover_pred_3_num_df <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("conf")) |> 
+  dplyr::mutate(row_id = 1:length(b)) |> 
+  tidyr::pivot_longer(
+    cols = -c(all_of(cell_ids), row_id)
+  ) |> 
+  dplyr::mutate(
+    ci = ifelse(stringr::str_detect(name, "low"), "lower", "upper"), 
+    name = stringr::str_remove_all(name, "_conf.low") |> 
+      stringr::str_remove_all("_conf.high")
+  ) |> 
+  tidyr::pivot_wider(
+    id_cols = c(all_of(cell_ids), name, row_id), 
+    names_from = ci, values_from = value
+  ) |> 
+  dplyr::mutate(
+    is_covered = dplyr::between(b, lower, upper)
+  ) |> 
+  dplyr::filter(!is.na(is_covered)) 
+
+cover_pred_3_num <- cover_pred_3_num_df |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    prop_covered = sum(is_covered, na.rm = TRUE)/length(is_covered)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    )
+  )
+
+sim_df_cover_sum <- cover_pred_3_num
+```
+
+```{r fig.width=10, fig.height=200, eval=FALSE}
+cover_pred_3_num |> 
+  ggplot2::ggplot(aes(x = n_bw, y = prop_covered, linetype = name, colour = name)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = unique(cover_pred_3_num$n_bw)) + 
+  facet_grid(
+    rows = vars(plot_group), cols = vars(b)) + 
+  scale_colour_viridis_d() + 
+  theme_minimal() +
+  theme(
+    strip.text.y.right = element_text(angle = 0)
+  )
+```
+
+#### CI width 
+
+```{r}
+ci_width_pred_3_num_sum <- cover_pred_3_num_df |> 
+  dplyr::mutate(
+    ci_width  = upper - lower
+  ) |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    mean_width = mean(ci_width, na.rm = TRUE)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    ), 
+    name = factor(name, labels = c("OLS", "Bootstrap", "HC4", "MM/KS", "MM"))
+  )
+
+sim_df_ci_width_sum <- ci_width_pred_3_num_sum
+```
+
+#### Bias in beta 
+
+```{r}
+bias_pred_3_num <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("estimate")) |> 
+  tidyr::pivot_longer(-all_of(cell_ids)) |> 
+  dplyr::mutate(
+    b_diff = value - b
+  )  |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    mean_diff = mean(b_diff, na.rm = TRUE), 
+    sd_diff = sd(b_diff, na.rm = TRUE)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    ),
+    name = factor(name, labels = c("OLS", "Bootstrap", "MM/KS", "MM"))
+  )
+
+sim_df_bias_sum <- bias_pred_3_num
+```
+
+```{r fig.width=10, fig.height=200, eval=FALSE}
+bias_pred_3_num |> 
+  ggplot2::ggplot(aes(x = n_bw, y = mean_diff, linetype = name, colour = name)) +
+  geom_point() + 
+  geom_line() + 
+  scale_x_continuous(breaks = unique(bias_pred_3_num$n_bw)) + 
+  facet_grid(
+    rows = vars(plot_group), cols = vars(b), 
+   # scales = "free_y"
+    ) + 
+  scale_colour_viridis_d() +
+  theme_minimal() +
+  theme(
+    strip.text.y.right = element_text(angle = 0)
+  )
+```
+
+##### Shifted coverage
+
+```{r}
+cover_shift_pred_3_num_df <- cover_pred_3_num_df |> 
+  dplyr::mutate(name_merge = factor(name, labels = c("OLS", "Bootstrap", "OLS", "MM/KS", "MM"))) |> 
+  dplyr::left_join(
+    bias_pred_3_num |> 
+      dplyr::mutate(name_merge = name) |> 
+      dplyr::select(-name, -plot_group), 
+    by = c(all_of(cell_ids), "name_merge")
+  ) |> 
+  dplyr::mutate(
+    lower_shifted = lower - mean_diff, 
+    upper_shifted = upper - mean_diff
+    ) |> 
+  dplyr::mutate(
+    is_covered = dplyr::between(b, lower_shifted, upper_shifted)
+  ) |> 
+  dplyr::filter(!is.na(lower_shifted))
+
+
+```
+
+
+```{r}
+cover_shift_pred_3_num_sum <- cover_shift_pred_3_num_df |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    prop_covered = sum(is_covered, na.rm = TRUE)/length(is_covered)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    ), 
+    name = factor(name, labels = c("OLS", "Bootstrap", "HC4", "MM/KS", "MM"))
+  )
+
+sim_df_cover_shift_sum <- cover_shift_pred_3_num_sum
+```
+
+```{r fig.height=50, fig.width=10, fig.align='center'}
+cover_shift_pred_3_num_plot <- cover_shift_pred_3_num_sum |> 
+  ggplot2::ggplot(aes(x = n_bw, y = prop_covered, linetype = name, colour = name)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = unique(cover_shift_pred_3_num_sum$n_bw)) + 
+  facet_grid(
+    rows = vars(plot_group), cols = vars(b)) + 
+  scale_colour_viridis_d() +
+  theme_minimal() +
+  theme(
+    strip.text.y.right = element_text(angle = 0)
+  )
+```
+
+#### Model errors 
+
+```{r}
+model_errors_pred_3_num_sum <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("p.value")) |> 
+  tidyr::pivot_longer(-all_of(cell_ids)) |> 
+  dplyr::filter(name != "lm_overall_p.value") |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    n_fail = sum(is.na(value))/length(value)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    ), 
+  )
+
+sim_df_model_errors_sum <- model_errors_pred_3_num_sum
+```
+
+
+
+```{r}
+sum_exports <- ls(pattern = "sum") |> grep(x = _, pattern = "pred_|exports", value = TRUE, invert = TRUE)
+
+sim_export <- purrr::map(
+  .x = sum_exports,
+  .f = text_as_fun
+)
+
+names(sim_export) <- sum_exports
+
+saveRDS(
+  sim_export,
+  paste0(
+    "../data/processed_data/sim_export_", "N-NUM-CAT_preds_3", ".rds"),
+)
+```
+
+## 8-NUM
+
+```{r}
+rm(sim_df)
+gc()
+
+
+
+file_names_8_num <- grep("cont_preds_8", file_names, value = TRUE) |> 
+  grep("_nr_1.3_", x = _,  value = TRUE, invert = TRUE)
+file_paths_8_num <- grep("cont_preds_8", file_paths, value = TRUE) |> 
+  grep("_nr_1.3_", x = _,  value = TRUE, invert = TRUE)
+
+sim_list <- purrr::map(
+  .x = file_paths_8_num, 
+  .f = readRDS
+)
+```
+
+### Pre-processing
+
+Keep only terms of interest: 
+
+```{r}
+#saveRDS(sim_list, "../data/processed_data/sim_list_8.rds")
+```
+
+
+```{r}
+sim_list <- purrr::map(
+  .x = sim_list, 
+  .f = \(x) x |> dplyr::filter(lm_term == "x1")
+)
+```
+
+Merge into a df:
+
+```{r}
+sim_df <- purrr::reduce(
+  .x = sim_list, 
+  .f = dplyr::bind_rows
+)  |> 
+  dplyr::filter(n_ratio != 1.5)
+```
+
+Remove the list to free-up memory: 
+
+```{r}
+rm(sim_list)
+gc()
+```
+
+
+
+### Summaries 
+
+#### Overall power/false-positives
+
+
+```{r}
+power_overall_8_num <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("overall_p.value")) |> 
+  tidyr::pivot_longer(
+    cols = -all_of(cell_ids)
+  ) |>  
+  dplyr::mutate(
+    is_sig = value < 0.05
+  ) |> 
+  dplyr::group_by(across(c(all_of(cell_ids)))) |> 
+  dplyr::summarise(
+    prop_sig = sum(is_sig, na.rm = TRUE)/length(is_sig)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n", 
+      "Skewness = ", target_skew, "\n", "Kurtosis = ", target_kurt, "\n",
+      "N ratio = ", n_ratio
+    ), 
+    het = paste0(
+      "n_het_pred = ", n_het_pred, 
+      "; VR = ", target_vr, 
+      "; het_shape = ", het_shape, 
+      "; target_het = ", target_het
+    )
+  )
+
+sim_df_overall_sum <- power_overall_8_num
+```
+
+
+```{r fig.width=10, fig.height=20, eval = FALSE}
+power_overall_8_num |> 
+  dplyr::filter(het_shape %in% c("vp1",  "vp2")) |> 
+  overall_power_plot()
+```
+
+```{r fig.width=10, fig.height=20, eval = FALSE}
+power_overall_8_num |> 
+  dplyr::filter(het_shape %in% c("vp1",  "vp3")) |> 
+  overall_power_plot()
+```
+
+```{r fig.width=10, fig.height=20, eval = FALSE}
+power_overall_8_num |> 
+  dplyr::filter(het_shape %in% c("vp1",  "vp4")) |> 
+  overall_power_plot()
+```
+
+
+#### Power/false positives 
+
+```{r}
+power_pred_8_num <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("p.value"), -lm_overall_p.value) |> 
+  tidyr::pivot_longer(
+    cols = -c(all_of(cell_ids))
+  ) |> 
+  dplyr::mutate(
+    is_sig = value < 0.05
+  ) |> 
+  dplyr::filter(!is.na(is_sig)) |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    prop_sig = sum(is_sig, na.rm = TRUE)/length(is_sig)
+  )  |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds,  "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    )
+  )
+
+sim_df_power_sum <- power_pred_8_num
+```
+
+```{r fig.width=10, fig.height=200, eval=FALSE}
+power_pred_8_num |> 
+  ggplot2::ggplot(aes(x = n_bw, y = prop_sig, linetype = name, colour = name)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = unique(power_pred_8_num$n_bw)) + 
+  facet_grid(
+    rows = vars(plot_group), cols = vars(b)) + 
+  scale_colour_viridis_d() + 
+  theme_minimal() +
+  theme(
+    strip.text.y.right = element_text(angle = 0)
+  )
+```
+
+#### Coverage of CIs
+
+```{r}
+cover_pred_8_num_df <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("conf")) |> 
+  dplyr::mutate(row_id = 1:length(b)) |> 
+  tidyr::pivot_longer(
+    cols = -c(all_of(cell_ids), row_id)
+  ) |> 
+  dplyr::mutate(
+    ci = ifelse(stringr::str_detect(name, "low"), "lower", "upper"), 
+    name = stringr::str_remove_all(name, "_conf.low") |> 
+      stringr::str_remove_all("_conf.high")
+  ) |> 
+  tidyr::pivot_wider(
+    id_cols = c(all_of(cell_ids), name, row_id), 
+    names_from = ci, values_from = value
+  ) |> 
+  dplyr::mutate(
+    is_covered = dplyr::between(b, lower, upper)
+  ) |> 
+  dplyr::filter(!is.na(is_covered)) 
+
+cover_pred_8_num <- cover_pred_8_num_df |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    prop_covered = sum(is_covered, na.rm = TRUE)/length(is_covered)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    )
+  )
+
+sim_df_cover_sum <- cover_pred_8_num
+```
+
+```{r fig.width=10, fig.height=200, eval=FALSE}
+cover_pred_8_num |> 
+  ggplot2::ggplot(aes(x = n_bw, y = prop_covered, linetype = name, colour = name)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = unique(cover_pred_8_num$n_bw)) + 
+  facet_grid(
+    rows = vars(plot_group), cols = vars(b)) + 
+  scale_colour_viridis_d() + 
+  theme_minimal() +
+  theme(
+    strip.text.y.right = element_text(angle = 0)
+  )
+```
+
+#### CI width 
+
+```{r}
+ci_width_pred_8_num_sum <- cover_pred_8_num_df |> 
+  dplyr::mutate(
+    ci_width  = upper - lower
+  ) |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    mean_width = mean(ci_width, na.rm = TRUE)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    ), 
+    name = factor(name, labels = c("OLS", "Bootstrap", "HC4", "MM/KS", "MM"))
+  )
+
+sim_df_ci_width_sum <- ci_width_pred_8_num_sum
+```
+
+#### Bias in beta 
+
+```{r}
+bias_pred_8_num <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("estimate")) |> 
+  tidyr::pivot_longer(-all_of(cell_ids)) |> 
+  dplyr::mutate(
+    b_diff = value - b
+  )  |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    mean_diff = mean(b_diff, na.rm = TRUE), 
+    sd_diff = sd(b_diff, na.rm = TRUE)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    ),
+    name = factor(name, labels = c("OLS", "Bootstrap", "MM/KS", "MM"))
+  )
+
+sim_df_bias_sum <- bias_pred_8_num
+```
+
+```{r fig.width=10, fig.height=200, eval=FALSE}
+bias_pred_8_num |> 
+  ggplot2::ggplot(aes(x = n_bw, y = mean_diff, linetype = name, colour = name)) +
+  geom_point() + 
+  geom_line() + 
+  scale_x_continuous(breaks = unique(bias_pred_8_num$n_bw)) + 
+  facet_grid(
+    rows = vars(plot_group), cols = vars(b), 
+   # scales = "free_y"
+    ) + 
+  scale_colour_viridis_d() +
+  theme_minimal() +
+  theme(
+    strip.text.y.right = element_text(angle = 0)
+  )
+
+bias_pred_8_sum <- bias_pred_8_num
+```
+
+##### Shifted coverage
+
+```{r}
+cover_shift_pred_8_num_df <- cover_pred_8_num_df |> 
+  dplyr::mutate(name_merge = factor(name, labels = c("OLS", "Bootstrap", "OLS", "MM/KS", "MM"))) |> 
+  dplyr::left_join(
+    bias_pred_8_num |> 
+      dplyr::mutate(name_merge = name) |> 
+      dplyr::select(-name, -plot_group), 
+    by = c(all_of(cell_ids), "name_merge")
+  ) |> 
+  dplyr::mutate(
+    lower_shifted = lower - mean_diff, 
+    upper_shifted = upper - mean_diff
+    ) |> 
+  dplyr::mutate(
+    is_covered = dplyr::between(b, lower_shifted, upper_shifted)
+  ) |> 
+  dplyr::filter(!is.na(lower_shifted))
+```
+
+
+```{r}
+cover_shift_pred_8_num_sum <- cover_shift_pred_8_num_df |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    prop_covered = sum(is_covered, na.rm = TRUE)/length(is_covered)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    ), 
+    name = factor(name, labels = c("OLS", "Bootstrap", "HC4", "MM/KS", "MM"))
+  )
+
+sim_df_cover_shift_sum <- cover_shift_pred_8_num_sum
+```
+
+```{r fig.height=50, fig.width=10, fig.align='center'}
+cover_shift_pred_8_num_plot <- cover_shift_pred_8_num_sum |> 
+  ggplot2::ggplot(aes(x = n_bw, y = prop_covered, linetype = name, colour = name)) + 
+  geom_line() + 
+  scale_x_continuous(breaks = unique(cover_shift_pred_8_num_sum$n_bw)) + 
+  facet_grid(
+    rows = vars(plot_group), cols = vars(b)) + 
+  scale_colour_viridis_d() +
+  theme_minimal() +
+  theme(
+    strip.text.y.right = element_text(angle = 0)
+  )
+```
+
+#### Model errors 
+
+```{r}
+model_errors_pred_8_num_sum <- sim_df |> 
+  dplyr::select(all_of(cell_ids), contains("p.value")) |> 
+  tidyr::pivot_longer(-all_of(cell_ids)) |> 
+  dplyr::filter(name != "lm_overall_p.value") |> 
+  dplyr::group_by(across(c(all_of(cell_ids), name))) |> 
+  dplyr::summarise(
+    n_fail = sum(is.na(value))/length(value)
+  ) |> 
+  dplyr::mutate(
+    plot_group = paste0(
+      "N cont. preds = ", n_cont_preds, "; N cat. preds = ", n_cat_preds, "\n",
+      "Skewness = ", target_skew, "; Kurtosis = ", target_kurt, "\n",
+      "n_het_pred = ", n_het_pred, "; VR = ", target_vr, ";\n",
+      "het_shape = ", het_shape, "; target_het = ", target_het, "\n",
+      "N ratio = ", n_ratio
+    ), 
+  )
+
+sim_df_model_errors_sum <- model_errors_pred_8_num_sum
+```
+
+
+```{r}
+sum_exports <- ls(pattern = "sum") |> grep(x = _, pattern = "pred_|exports", value = TRUE, invert = TRUE)
+
+sim_export <- purrr::map(
+  .x = sum_exports,
+  .f = text_as_fun
+)
+
+names(sim_export) <- sum_exports
+
+saveRDS(
+  sim_export,
+  paste0(
+    "../data/processed_data/sim_export_", "N-NUM-CAT_preds_8", ".rds"),
+)
+```
+
+
+## Combine exports 
+
+```{r eval=FALSE}
+export_names <- list.files("../data/processed_data/", pattern = "preds", full.names = FALSE)
+
+sim_export_list <- purrr::map(
+ .x = list.files("../data/processed_data/", pattern = "preds*", full.names = TRUE),
+ .f = readRDS
+)
+
+names(sim_export_list) <- export_names
+
+sim_export_list$`sim_export_N-NUM-CAT_preds_8.rds` <-  list(
+  sim_export_list$`sim_export_N-NUM-CAT_preds_8_nr_1.3.rds`, 
+  sim_export_list$`sim_export_N-NUM-CAT_preds_8.rds`
+) |> 
+  purrr::transpose() |> 
+  purrr::map(dplyr::bind_rows)
+
+sim_export_list$`sim_export_N-NUM-CAT_preds_8_nr_1.3.rds` <- NULL
+
+saveRDS(sim_export_list, file = "../data/processed_data/sim_export_N-NUM-CAT_split.rds")
+
+# sim_export_list_t <- sim_export_list |> 
+#   purrr::transpose() |> 
+#   purrr::map(dplyr::bind_rows)
+# 
+# saveRDS(sim_export_list_t, file = "../data/processed_data/sim_export_N-NUM-CAT.rds")
+```
+
+
+```{r}
+# my_list <- list(
+#   pred_1 = list(
+#     power_sum = data.frame(a = 1, b = 1),
+#     cover_sum = data.frame(c = 1, d = 1)
+#   ), 
+#   pred_3 = list(
+#     power_sum = data.frame(a = 3, b = 3),
+#     cover_sum = data.frame(c = 3, d = 3)
+#   )
+# )
+# 
+# 
+# my_list_res <- my_list |> 
+#   purrr::transpose()  |> 
+#   purrr::map(dplyr::bind_rows)
+# 
+# my_list_res <- list(
+#   power_sum = rbind(data.frame(a = 1, b = 1), data.frame(a = 3, b = 3)), 
+#   cover_sum = rbind(data.frame(c = 1, d = 1), data.frame(c = 3, d = 3))
+# )
+```
+
