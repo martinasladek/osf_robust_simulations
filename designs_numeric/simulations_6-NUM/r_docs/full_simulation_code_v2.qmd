@@ -1,0 +1,4998 @@
+---
+title: "Full simulation code"
+format: html
+---
+
+# Setup
+
+```{r setup, message=FALSE}
+# Packages --------------------------------------------------------------------
+library(afex)
+library(dplyr)
+library(faux)
+library(ggplot2)
+library(parameters)
+library(purrr)
+library(WRS)
+library(WRS2)
+library(zoo)
+
+source("../scripts/helpers.R")
+
+# Functions -------------------------------------------------------------------
+
+check_iterations <- function() {
+  repeat {
+    user_input <- readline("Have you set the correct number of iterations? (y/n): ")
+    # Check the user input and act accordingly
+    if (tolower(user_input) == "y") {
+      print("Continuing...")
+      break  # Exit the loop and continue with the script
+    } else if (tolower(user_input) == "n") {
+      print("Exiting...")
+      message("Press 'y' to continue.")
+    } else {
+      print("Invalid input. Please enter 'y' or 'n'.")
+    }
+  }
+}
+
+show_progress <- function(i, n_pop){
+  cat(
+    paste0("Population ", i, " out of ", n_pop, " (", i/n_pop*100, "%).\n\n")
+  )
+}
+
+export_results <- function(result_file, design_label){
+  
+  file_name <- paste0(
+    design_label,
+    "_", Sys.Date(), ".rds"
+  )
+  
+  file_path <- paste0("../data/simulation_exports/", file_name)
+  
+  saveRDS(result_file, file_path)
+  
+}
+
+transform_norm <- function(raw_var, mu, sigma, nu, tau){
+  
+  pnorm_var <- pnorm(raw_var)
+  transformed_var <- gamlss.dist::qSHASHo(
+    p = pnorm_var, mu = mu, sigma = sigma, nu = nu, tau = tau)
+  
+  return(transformed_var)
+  
+}
+
+sample_n_from_ratio_rm <- function(n_rm, n_ratio){
+  
+  n1 = floor(n_rm / (n_ratio + 1))
+  n2 = n_rm - n1
+  
+  return(
+    c(n1 = n1, n2 = n2)
+  )
+}
+
+sample_n_from_ratio_bw2 <- function(n_bw, n_ratio){
+  
+  n1 = floor(n_bw / (n_ratio + 1))
+  n2 = n_bw - n1
+  
+  return(
+    c(n1 = n1, n2 = n2)
+  )
+}
+
+sample_n_from_ratio_bw3 <- function(n_bw, n_ratio) {
+  # Calculate sample size for the first two groups (equal sample sizes)
+  n1 = floor(n_bw / (2 * n_ratio + 1))
+  n2 = n1
+  
+  # Calculate sample size for the third group based on the ratio
+  n3 = floor(n1 * n_ratio)
+  
+  return(
+    c(n1 = n1, n2 = n2, n3 = n3)
+  )
+}
+
+vp1 <- function(x1, vp_val) 1
+vp23 <- function(x1, vp_val) (5 / (1+exp(-vp_val*(abs(x1)-1))))/2.5
+vp4 <- function(x1, vp_val) (5 / (1+exp(-vp_val*((x1)-1))))/2.5
+
+squish <- function(x, new_min = min_bound, new_max = max_bound){   
+  (x - min(x))/(max(x)-min(x)) * (new_max - new_min) + new_min 
+}
+
+mod_fun_vp1 <- function(x) (x)
+
+mod_fun_vp23 <- function(x){
+  abs(x)
+}
+
+mod_fun_vp4 <- function(x){
+  min = 0
+  max = 1.75
+  (max-min) * ((x - min(x)) / (max(x) - min(x)) + min)
+}
+
+text_as_fun <- function(function_string){
+  eval(parse(text = function_string))
+}
+
+lm_summary <- function(lm_mod_ij){
+  
+  lm_mod_ij_betas <- broom::tidy(lm_mod_ij, conf.int = TRUE)
+  names(lm_mod_ij_betas) <- paste0("lm_", names(lm_mod_ij_betas))
+  
+  lm_mod_ij_overall <- 
+    broom::glance(lm_mod_ij, conf.int = TRUE)[, c("r.squared", "adj.r.squared", "statistic", "p.value")]
+  names(lm_mod_ij_overall) <- paste0("lm_overall_", names(lm_mod_ij_overall))
+  
+  dplyr::bind_cols(lm_mod_ij_betas, lm_mod_ij_overall)
+  
+}
+
+rob_mm_summary <- function(rob_mm_mod_ij, prefix){
+  
+  rob_mm_confint_ij <- tibble::as_tibble(confint(rob_mm_mod_ij))
+  names(rob_mm_confint_ij) <- c("conf.low", "conf.high")
+  rob_mm_ij_overall <- summary(rob_mm_mod_ij)
+  
+  rob_mm_mod_ij_betas <- dplyr::bind_cols(
+    broom::tidy(rob_mm_mod_ij), rob_mm_confint_ij, 
+    r.squared = rob_mm_ij_overall$r.squared, 
+    adj.r.squared = rob_mm_ij_overall$adj.r.squared
+  ) |> 
+    dplyr::mutate(
+      warning = NA
+    )
+  
+  names(rob_mm_mod_ij_betas) <- paste0("rob_", prefix, "_", names(rob_mm_mod_ij_betas))
+  
+  rob_mm_mod_ij_betas
+  
+}
+
+rob_hc4_summary <- function(lm_mod_ij){
+  tibble::tibble(parameters::parameters(lm_mod_ij, vcov = "HC4")) |> 
+    dplyr::select(
+      rob_hc4_std.error = SE, 
+      rob_hc4_conf.low = CI_low, rob_hc4_conf.high = CI_high, 
+      rob_hc4_p.value = p
+    )
+}
+
+rob_boot_summary <- function(lm_mod_ij){
+  tibble::tibble(
+    parameters::parameters(lm_mod_ij, bootstrap = TRUE, ci_method = "bcai", iteractions = 599)
+  ) |> 
+    dplyr::select(
+      rob_boot_estimate = Coefficient, 
+      rob_boot_conf.low = CI_low, rob_boot_conf.high = CI_high, 
+      rob_boot_p.value = p
+    )
+}
+
+blank_robust_export <- function(){
+  
+  tibble::tibble(
+    term = NA,
+    estimate = NA , std.error = NA, statistic = NA, p.value = NA, conf.low = NA, conf.high = NA,
+    r.squared = NA, adj.r.squared = NA
+  )
+  
+}
+
+fit_and_summarise_mods_bw <- function(mod_formula, sample_ij, mm_label = "mm", ks_label = "ks"){
+  
+  #mod_formula = lm_formula
+  mod_formula <- as.formula(mod_formula)
+  
+  lm_mod_ij <- lm(mod_formula, data = sample_ij)
+  lm_mod_ij$call$formula <- mod_formula #explicitly define formula, otherwise parameters::parameters cry. 
+  
+  lm_summary_ij <- lm_summary(lm_mod_ij = lm_mod_ij)
+  
+  
+  ## fit robust model(s)
+  
+  ### MM estimator
+  
+  rob_mm_mod_ij <- tryCatch(
+    robustbase::lmrob(mod_formula, data = sample_ij),
+    warning = function(w) return(as.character(w))
+  )
+  
+  if(is.character(rob_mm_mod_ij)){
+    
+    rob_mm_summary_ij <- blank_robust_export() |> 
+      dplyr::mutate(warning = rob_mm_mod_ij)
+    
+    names(rob_mm_summary_ij) <- paste0("rob_", mm_label, "_", names(rob_mm_summary_ij))
+    
+  } else {
+    
+    rob_mm_summary_ij <- rob_mm_summary(rob_mm_mod_ij = rob_mm_mod_ij, mm_label)
+    
+  }
+  
+  ### KS2014 estimator
+  
+  rob_ks_mod_ij <- tryCatch(
+    robustbase::lmrob(mod_formula, data = sample_ij, setting = "KS2014"),
+    warning = function(w) return(as.character(w))
+  )
+  
+  if(is.character(rob_ks_mod_ij)){
+    
+    rob_ks_summary_ij <- blank_robust_export() |> 
+      dplyr::mutate(warning = rob_ks_mod_ij)
+    
+    names(rob_ks_summary_ij) <- paste0("rob_", ks_label, "_", names(rob_ks_summary_ij))
+    
+  } else {
+    
+    rob_ks_summary_ij <- rob_mm_summary(rob_mm_mod_ij = rob_ks_mod_ij, ks_label)
+    
+  }
+  
+  ### HC4 
+  rob_hc4_summary_ij <- rob_hc4_summary(lm_mod_ij = lm_mod_ij)
+  
+  ### Bootstrap
+  rob_boot_summary_ij <- rob_boot_summary(lm_mod_ij = lm_mod_ij)
+  
+  
+  # Return: 
+  tibble::tibble(
+    lm_summary = list(lm_summary_ij), 
+    rob_mm_summary = list(rob_mm_summary_ij), 
+    rob_ks_summary = list(rob_ks_summary_ij), 
+    rob_hc4_summary = list(rob_hc4_summary_ij), 
+    rob_boot_summary = list(rob_boot_summary_ij)
+  ) |> 
+    tidyr::unnest(cols = everything())
+  
+}
+
+afex_summary <- function(afex_mod, prefix){
+  
+  afex_summary <- as.data.frame(parameters::parameters(afex_mod)) |> 
+    dplyr::select(term = Parameter, df1 = df, df2 = df_error, statistic = `F`, p)
+  
+  names(afex_summary) <- paste0("afex_", prefix, "_", names(afex_summary))
+  
+  afex_summary
+  
+}
+
+afex_nc_gg_summary <- function(afex_formula, data, factorize = TRUE){
+  
+  afex_formula = as.formula(afex_formula)
+  
+  suppressWarnings({
+    
+    afex_nc_mod <- afex::aov_4(afex_formula, data = data, factorize = factorize, anova_table = list(correction = "none")) 
+    afex_nc_summary <- afex_summary(afex_nc_mod, "nc")
+    
+    afex_gg_mod <- afex::aov_4(afex_formula, data = data, factorize = factorize, anova_table = list(correction = "GG"))
+    afex_gg_summary <- afex_summary(afex_nc_mod, "gg")
+    
+  })
+  
+  dplyr::bind_cols(afex_nc_summary, afex_gg_summary)
+  
+}
+
+afex_ttest_params <- function(group2, group1, df, term = "gw"){
+  
+  ttest_mod_ij <- t.test(df[[group2]], df[[group1]], paired = TRUE)
+  ttest_summary_ij <- parameters::parameters(ttest_mod_ij) |> 
+    tibble::as_tibble() |> 
+    dplyr::transmute(term = term, diff = Difference, statistic = t, p, conf.low = CI_low, conf.high = CI_high)
+  names(ttest_summary_ij) <- paste0("afex_", "t_", names(ttest_summary_ij))
+  
+  ttest_summary_ij
+  
+}
+
+rob_trim_params <- function(group2, group1, df, term = "gw"){
+  
+  rob_trim_mod <- WRS::yuend(df[[group2]], df[[group1]])
+  
+  rob_trim_summary <- tibble::tibble(
+    term = term, diff = rob_trim_mod$dif, statistic = rob_trim_mod$teststat, p = rob_trim_mod$p.value,
+    conf.low = rob_trim_mod$ci[1], conf.high = rob_trim_mod$ci[2]
+  )
+  names(rob_trim_summary) <- paste0("rob_trim_t_", names(rob_trim_summary))
+  
+  rob_trim_summary
+  
+}
+
+rob_trimboot_params <- function(group2, group1, df, tr, prefix, term = "gw"){
+  
+  rob_trimboot_mod <- WRS::ydbt(df[[group2]], df[[group1]], tr = tr, SEED = FALSE) 
+  rob_trimboot_summary <- tibble::tibble(
+    term = term, diff = rob_trimboot_mod$dif, p = rob_trimboot_mod$p.value,
+    conf.low = rob_trimboot_mod$ci[1], conf.high = rob_trimboot_mod$ci[2]
+  )
+  names(rob_trimboot_summary) <- paste0("rob_", prefix, "_t_", names(rob_trimboot_summary))
+  
+  rob_trimboot_summary
+  
+}
+
+format_wrs_mod <- function(wrs_mod, metrics, prefix){
+  
+  wrs_mod_summary <- as.data.frame(wrs_mod[metrics])
+  names(wrs_mod_summary) <- paste0(prefix, "_", names(wrs_mod_summary))
+  
+  wrs_mod_summary
+  
+}
+
+stfu <- function(...){
+  SimDesign::quiet(...)
+}
+
+# Parameter settings ----------------------------------------------------------
+
+check_iterations()
+
+n_iter = 1000
+n_population = 100000
+global_seed <- 21023
+
+# Shared population parameters 
+b <- c(0, 0.1, 0.3, 0.5)
+
+n_ratio_bw <- c(1, 1.5, 2)
+n_ratio_rm <- c(1, 1.2, 2)
+
+# Repeated measures sample metrics 
+n_rm <- c(18, 65, 172)
+
+# Between measures sample metrics
+n_bw <- c(71, 296, 1141)
+```
+
+
+## Within-between designs 
+
+### CAT-2W
+
+Generate grid: 
+
+```{r message=FALSE}
+cat_2w <- readr::read_csv("../data/simulation_grids/CAT-2W.csv")
+
+cat_2w_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2W", 
+    combo_id = cat_2w$combo_id,
+    b, n_rm, 
+    iter = 1:n_iter
+  ), 
+  cat_2w |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+
+generate_cat2w <- function(
+    n = 100000, 
+    b, 
+    b_shift = 0, 
+    sigma_shift, 
+    sigma = 1,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    r = 0.5, 
+    within = list(w_group = paste0("gw", 1:2)), 
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      gw1 = transform_norm(raw_var = gw1, mu = 0, nu = nu, tau = tau,
+                           sigma = sigma),
+      gw2 = transform_norm(raw_var = gw2, mu = 0, nu = nu, tau = tau,
+                           sigma = (sigma+sigma_shift)) + (b + b_shift)
+    )
+  
+  return(transformed_df)
+}
+
+
+## sample fit and save
+cat_2w_sfs <- function(pop_i, n_rm){
+  
+  ## create a sample   
+  sample_ij <- dplyr::slice_sample(.data = pop_i, n = n_rm)
+  #sample_ij <- dplyr::slice_sample(.data = pop_i, n = 100)
+  
+  ## fit ols model 
+  
+  afex_summary_ij <- afex_ttest_params("gw2", "gw1", sample_ij)
+  rob_trim_summary_ij <- rob_trim_params("gw2", "gw1", sample_ij)
+  rob_boot_summary_ij <- rob_trimboot_params("gw2", "gw1", sample_ij, 0, "boot")
+  rob_trimboot_summary_ij <- rob_trimboot_params("gw2", "gw1", sample_ij, 0.2, "trimboot")
+  
+  # Return: 
+  dplyr::bind_cols(afex_summary_ij, rob_trim_summary_ij, rob_boot_summary_ij, rob_trimboot_summary_ij)
+  
+}
+
+```
+
+Iterate: 
+
+```{r}
+set.seed(global_seed)
+
+cat_2w_unique_populations <- cat_2w_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2w_n_pop <- nrow(cat_2w_unique_populations)
+
+for(i in 1:cat_2w_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2w_n_pop)
+  
+  pop_row_i <- cat_2w_unique_populations[i, ]
+  pop_i <- generate_cat2w(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift = pop_row_i$sigma_shift, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  grid_i <- cat_2w_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  ## sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i = list(pop_i),
+                                  n_rm = n_rm
+                                ), 
+                                .f = cat_2w_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+
+### CAT-3W
+
+```{r message=FALSE}
+cat_3w <- readr::read_csv("../data/simulation_grids/CAT-3W.csv")
+
+cat_3w_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-3w", 
+    combo_id = cat_3w$combo_id,
+    b, n_rm, 
+    iter = 1:n_iter
+  ), 
+  cat_3w |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+
+generate_cat3w <- function(
+    n = 100000, 
+    b, 
+    b_shift = 0, 
+    sigma = 1, 
+    sigma_shift,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    r = 0.5, 
+    within = list(gw1 = c("gw1", "gw2", "gw3")), 
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      gw1 = transform_norm(raw_var = gw1, mu = 0, sigma = sigma, nu = nu, tau = tau),
+      gw2 = transform_norm(raw_var = gw2, mu = 0, sigma = sigma, nu = nu, tau = tau) + b,
+      gw3 = transform_norm(raw_var = gw3, mu = 0, sigma = sigma + sigma_shift, nu = nu, tau = tau) + b
+    )
+  
+  return(transformed_df)
+}
+
+## sample fit and save
+cat_3w_sfs <- function(pop_i, n_rm){
+  
+  ## create a sample   
+  sample_ij <- dplyr::slice_sample(.data = pop_i, n = n_rm)
+  #sample_ij <- dplyr::slice_sample(.data = pop_i, n = 100)
+  
+  sample_ij_long <- sample_ij |> 
+    tidyr::pivot_longer(-id, names_to = "gw", values_to = "y") 
+  
+  ## fit ols model 
+  
+  afex_nc_gg_summary_ij <- afex_nc_gg_summary("y ~ gw + (gw|id)", data = sample_ij_long) 
+  afex_params_ij <- dplyr::bind_rows(
+    afex_ttest_params("gw2", "gw1", sample_ij, term = "gw2-gw1"), 
+    afex_ttest_params("gw3", "gw1", sample_ij, term = "gw3-gw1")
+  )
+  
+  rob_trim_mod_ij <- WRS::rmanova(sample_ij[, -1])
+  rob_trim_summary_ij <- format_wrs_mod(rob_trim_mod_ij, c("test", "p.value"), "rob_trim")
+  rob_trim_params_ij <- dplyr::bind_rows(
+    rob_trim_params("gw2", "gw1", sample_ij, term = "gw2-gw1"), 
+    rob_trim_params("gw3", "gw1", sample_ij, term = "gw3-gw1")
+  )
+  
+  rob_boot_mod_ij <- WRS::rmanovab(x = sample_ij[, -1], tr = 0) |> stfu()
+  rob_boot_summary_ij <- format_wrs_mod(rob_boot_mod_ij, c("teststat", "p.value"), "rob_boot")
+  rob_boot_params_ij <- dplyr::bind_rows(
+    rob_trimboot_params("gw2", "gw1", sample_ij, term = "gw2-gw1", tr = 0, prefix = "boot"), 
+    rob_trimboot_params("gw3", "gw1", sample_ij, term = "gw3-gw1", tr = 0, prefix = "boot")
+  )
+  
+  rob_trimboot_mod_ij <- WRS::rmanovab(x = sample_ij[, -1], tr = 0.2) |> stfu()
+  rob_trimboot_summary_ij <- format_wrs_mod(rob_trimboot_mod_ij, c("teststat", "p.value"), "rob_trimboot")
+  rob_trimboot_params_ij <- dplyr::bind_rows(
+    rob_trimboot_params("gw2", "gw1", sample_ij, term = "gw2-gw1", tr = 0.2, prefix = "trimboot"), 
+    rob_trimboot_params("gw3", "gw1", sample_ij, term = "gw3-gw1", tr = 0.2, prefix = "trimboot")
+  )
+  
+  dplyr::bind_cols(
+    afex_nc_gg_summary_ij, afex_params_ij, 
+    rob_trim_summary_ij, rob_trim_params_ij, 
+    rob_boot_summary_ij, rob_boot_params_ij, 
+    rob_trimboot_summary_ij, rob_trimboot_params_ij
+  )
+
+}
+```
+
+Iterate: 
+
+```{r message=FALSE, warning=FALSE}
+set.seed(global_seed)
+
+cat_3w_unique_populations <- cat_3w_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_3w_n_pop <- nrow(cat_3w_unique_populations)
+
+for(i in 1:cat_3w_n_pop){
+  
+  show_progress(i = i, n_pop = cat_3w_n_pop)
+  
+  pop_row_i <- cat_3w_unique_populations[i, ]
+  pop_i <- generate_cat3w(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift = pop_row_i$sigma_shift, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  grid_i <- cat_3w_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(
+        .progress = TRUE, 
+        .l = list(
+          pop_i = list(pop_i),
+          n_rm = n_rm 
+        ), 
+        .f = cat_3w_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+
+### CAT-2W-2W
+
+Generate grid:
+
+```{r message=FALSE}
+cat_2w2w <- readr::read_csv("../data/simulation_grids/CAT-2W-2W.csv")
+
+cat_2w2w_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2W-2W", 
+    combo_id = cat_2w2w$combo_id,
+    b, n_rm, 
+    iter = 1:n_iter
+  ), 
+  cat_2w2w |> dplyr::select(-design),
+  by = c("combo_id")
+)  |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+
+generate_cat2w2w <- function(
+    n = 100000, 
+    b, 
+    b_shift_1 = 0, 
+    b_shift_2 = 0, 
+    sigma = 1, 
+    sigma_shift_1, 
+    sigma_shift_2,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    r = 0.5, 
+    within = list(w_group1 = c("gw1", "gw2"), w_group2 = c("a", "b")),
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      gw1_a = transform_norm(raw_var = gw1_a, mu = 0, nu = nu, tau = tau,
+                             sigma = sigma),
+      gw1_b = transform_norm(raw_var = gw1_b, mu = 0, nu = nu, tau = tau, 
+                             sigma = sigma + sigma_shift_1) + b + b_shift_1, 
+      gw2_a = transform_norm(raw_var = gw2_a, mu = 0, nu = nu, tau = tau,
+                             sigma = sigma) + b,
+      gw2_b = transform_norm(raw_var = gw2_b, mu = 0, nu = nu, tau = tau, 
+                             sigma = sigma + sigma_shift_2) + 3*b + b_shift_2
+    )
+  
+  return(transformed_df)
+}
+
+## sample fit and save
+cat_2w2w_sfs <- function(pop_i, n_rm){
+  
+  ## create a sample   
+  sample_ij <- dplyr::slice_sample(.data = pop_i, n = n_rm)
+  #sample_ij <- dplyr::slice_sample(.data = pop_i, n = 100)
+  
+  ## fit ols model 
+  
+  sample_ij_long <- sample_ij |> 
+    tidyr::pivot_longer(-id, names_to = "gw", values_to = "y") |> 
+    dplyr::mutate(
+      gw2 = ifelse(stringr::str_detect(gw, "a"), "a", "b"), 
+      gw1 = as.character(readr::parse_number(gw))
+    )
+  
+  afex_summary_ij <- afex_nc_gg_summary("y ~ gw1*gw2 + (gw1*gw2|id)", data = sample_ij_long)
+  
+  rob_trim_summary_ij <- WRS::wwtrim(x = sample_ij[-1], J = 2, K = 2, tr = 0.2)
+  rob_trim_summary_ij <- tibble::tibble(
+    statistic = unlist(rob_trim_summary_ij[c(1,3,5)]), 
+    p = unlist(rob_trim_summary_ij[c(2,4,6)])
+  )
+  names(rob_trim_summary_ij) <- paste0("rob_trim_", names(rob_trim_summary_ij))
+  
+  rob_boot_summary_ij <- WRS::wwtrimbt(x = sample_ij[-1], J = 2, K = 2, tr = 0) 
+  rob_boot_summary_ij <- tibble::tibble(
+    rob_boot_p = unlist(rob_boot_summary_ij)
+  )
+  
+  rob_trimboot_summary_ij <- WRS::wwtrimbt(x = sample_ij[-1], J = 2, K = 2, tr = 0.2) 
+  rob_trimboot_summary_ij <- tibble::tibble(
+    rob_trimboot_p = unlist(rob_trimboot_summary_ij)
+  )
+  
+  afex_int_b <- WRS::wwmcp(x = sample_ij[-1], J = 2, K = 2, tr = 0)$Factor_AB$psihat[2]
+  rob_trim_int_b <- WRS::wwmcp(x = sample_ij[-1], J = 2, K = 2, tr = 0.2)$Factor_AB$psihat[2]
+  
+  dplyr::bind_cols(
+    afex_summary_ij, rob_trim_summary_ij, rob_boot_summary_ij, rob_trimboot_summary_ij, 
+    afex_int_b = afex_int_b, rob_trim_int_b = rob_trim_int_b
+  )
+  
+  
+  
+}
+```
+
+Iterate: 
+
+```{r}
+set.seed(global_seed)
+
+cat_2w2w_unique_populations <- cat_2w2w_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2w2w_n_pop <- nrow(cat_2w2w_unique_populations)
+
+for(i in 1:cat_2w2w_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2w2w_n_pop)
+  
+  pop_row_i <- cat_2w2w_unique_populations[i, ]
+  pop_i <- generate_cat2w2w(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift_1 = pop_row_i$sigma_shift_1, sigma_shift_2 = pop_row_i$sigma_shift_2, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  grid_i <- cat_2w2w_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(
+        .progress = TRUE, 
+        .l = list(
+          pop_i = list(pop_i),
+          n_rm = n_rm
+        ), 
+        .f = cat_2w2w_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+### CAT-2W-2B
+
+```{r message=FALSE}
+cat_2w2b <- readr::read_csv("../data/simulation_grids/CAT-2W-2B.csv")
+
+cat_2w2b_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2W-2B", 
+    combo_id = cat_2w2b$combo_id,
+    b, n_rm, 
+    n_ratio = n_ratio_rm, 
+    iter = 1:n_iter
+  ), 
+  cat_2w2b |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+generate_cat2w2b <- function(
+    n = 100000, 
+    b, 
+    b_shift_1 = 0, 
+    b_shift_2 = 0, 
+    sigma = 1, 
+    sigma_shift_1, 
+    sigma_shift_2,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    r = 0.5, 
+    within = list(w_group1 = c("gw1", "gw2")),
+    between = list(between_group = c("gb1", "gb2")),
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      gw1 = dplyr::case_when(
+        between_group == "gb1" ~ transform_norm(raw_var = gw1, mu = 0, nu = nu, tau = tau,
+                                                sigma = sigma),
+        between_group == "gb2" ~ transform_norm(raw_var = gw1, mu = 0, nu = nu, tau = tau,
+                                                sigma = sigma + sigma_shift_1) + b + b_shift_1
+      ),
+      gw2 = dplyr::case_when(
+        between_group == "gb1" ~ transform_norm(raw_var = gw2, mu = 0, nu = nu, tau = tau,
+                                                sigma = sigma) + b,
+        between_group == "gb2" ~ transform_norm(raw_var = gw2, mu = 0, nu = nu, tau = tau,
+                                                sigma = sigma + sigma_shift_2) + 3*b + b_shift_2
+      ),
+    )
+  
+  return(transformed_df)
+}
+
+tsplit_wrapper <- function(J, K, blist, tr){
+  warn_increase <- 0
+  warn_message <- NULL
+  
+  tsplit_result <- withCallingHandlers(
+    
+    WRS::tsplit(J, K, blist, tr),
+    
+    warning = function(w) {
+      warn_increase <<- 1
+      warn_message <<- paste0(w)
+    }
+  )
+  
+  tsplit_result$warn_increase <- warn_increase
+  tsplit_result$warn_message <- warn_message
+  
+  return(tsplit_result)
+}
+
+tsplit_error_wrapper <- function(J, K, blist, tr){
+  tryCatch(
+    tsplit_wrapper(J, K, blist, tr) |> suppressWarnings(),
+    error = function(e) {
+      paste0(e)
+    }
+  )
+}
+
+bwtrimbt_mod <- function (J, K, x, tr = 0.2, JK = J * K, grp = c(1:JK), nboot = 599, SEED = FALSE) 
+{
+  if (SEED)
+    set.seed(2)
+  if (is.data.frame(x) || is.matrix(x)) {
+    y <- list()
+    ik = 0
+    il = c(1:K) - K
+    for (j in 1:J) {
+      il = il + K
+      zz = x[, il]
+      zz = elimna(zz)
+      for (k in 1:K) {
+        ik = ik + 1
+        y[[ik]] = zz[, k]
+      }
+    }
+    x <- y
+  }
+  JK <- J * K
+  data <- list()
+  xcen <- list()
+  for (j in 1:length(x)) {
+    data[[j]] <- x[[grp[j]]]
+    xcen[[j]] <- data[[j]] - mean(data[[j]], tr)
+  }
+  x <- data
+  # set.seed(2) # Why would you do this to me.  
+  nvec <- NA
+  jp <- 1 - K
+  for (j in 1:J) {
+    jp <- jp + K
+    nvec[j] <- length(x[[j]])
+  }
+  
+  blist <- list()
+  
+  warn_count = 0
+  warn_vec <- NULL
+  error_count = 0
+  error_vec <- NULL
+  #print("Taking bootstrap samples. Please wait.") #No thanks. 
+  testmat <- matrix(NA, ncol = 3, nrow = nboot)
+  for (iboot in 1:nboot) {
+    iv <- 0
+    for (j in 1:J) {
+      temp <- sample(nvec[j], replace = T)
+      for (k in 1:K) {
+        iv <- iv + 1
+        tempx <- xcen[[iv]]
+        blist[[iv]] <- tempx[temp]
+      }
+    }
+    btest <- tsplit_error_wrapper(J, K, blist, tr)
+    
+    if(is.character(btest)){
+      
+      testmat[iboot, 1] <- NA
+      testmat[iboot, 2] <- NA
+      testmat[iboot, 3] <- NA
+      
+      error_count = error_count + 1
+      error_vec <- c(error_vec, btest)
+      
+    } else {
+    
+      warn_count = c(warn_count, btest$warn_increase)
+      warn_vec = c(warn_vec, btest$warn_message)
+      
+      testmat[iboot, 1] <- btest$Qa
+      testmat[iboot, 2] <- btest$Qb
+      testmat[iboot, 3] <- btest$Qab
+      
+    }
+  }
+  
+  test = WRS::tsplit(J, K, x, tr = tr)
+  pbA = mean(test$Qa[1] < testmat[, 1])
+  pbB = mean(test$Qb[1] < testmat[, 2])
+  pbAB = mean(test$Qab[1] < testmat[, 3])
+  
+  list(
+    p.value.A = pbA, p.value.B = pbB, p.value.AB = pbAB, 
+    warn_count = sum(warn_count), 
+    warn_message = ifelse(is.null(warn_vec), NA_character_, paste0(unique(warn_vec), sep = ";")), 
+    error_count = error_count, 
+    error_message = ifelse(is.null(error_vec), NA_character_, paste0(unique(error_vec), sep = ";"))
+  )
+}
+
+## sample fit and save
+cat_2w2b_sfs <- function(pop_i_gb1, pop_i_gb2 , n_rm, n_ratio){
+  
+  ## calculate sample split 
+  n1n2 <- sample_n_from_ratio_rm(n_rm, n_ratio)
+ # n1n2 <- sample_n_from_ratio_rm(18, 2)
+  
+  ## create a sample   
+  sample_ij <- dplyr::bind_rows(
+    pop_i_gb1 |> dplyr::slice_sample(n = n1n2[["n1"]]), 
+    pop_i_gb2 |> dplyr::slice_sample(n = n1n2[["n2"]]) 
+  )
+  
+  
+  ## fit ols model 
+  
+  sample_ij_long <- sample_ij |> 
+    tidyr::pivot_longer(-c(id, between_group), names_to = "gw", values_to = "y") 
+  
+  afex_summary_ij <- afex_nc_gg_summary("y ~ gw*between_group + (gw|id)", data = sample_ij_long)
+
+  ## robust mods 
+  
+  wrs_list <- list(
+    `1a` = dplyr::filter(sample_ij_long, between_group == "gb1", gw == "gw1")$y,
+    `1b` = dplyr::filter(sample_ij_long, between_group == "gb1", gw == "gw2")$y,
+    `2a` = dplyr::filter(sample_ij_long, between_group == "gb2", gw == "gw1")$y,
+    `2b` = dplyr::filter(sample_ij_long, between_group == "gb2", gw == "gw2")$y
+  )
+
+  if(any(n1n2 < 12)){nboot = 1000
+  } else{nboot = 599}
+  
+  rob_trim_mod_ij <- WRS::bwtrim(J = 2, K = 2, data = wrs_list, tr = 0.2)
+  rob_trim_summary_ij <- tibble::tibble(
+    statistic = unlist(rob_trim_mod_ij[c(1,3,5)]),
+    p = unlist(rob_trim_mod_ij[c(2,4,6)]))
+  names(rob_trim_summary_ij) <- paste0("rob_trim_", names(rob_trim_summary_ij))
+
+  rob_boot_mod_ij <-  bwtrimbt_mod(J = 2, K = 2,  x = wrs_list, tr = 0, nboot = nboot) |> suppressWarnings()
+  rob_boot_summary_ij <- tibble::tibble(
+    rob_boot_p = unlist(rob_boot_mod_ij[-c(4,5,6,7)]), 
+    rob_boot_warn_count = unlist(rob_boot_mod_ij[4]), 
+    rob_boot_warns = unlist(rob_boot_mod_ij[5]), 
+    rob_boot_error_count = unlist(rob_boot_mod_ij[6]),
+    rob_boot_errors = unlist(rob_boot_mod_ij[7])
+  ) 
+
+  rob_trimboot_mod_ij <-  bwtrimbt_mod(J = 2, K = 2,  x = wrs_list, tr = 0.2, nboot = nboot) |> suppressWarnings()
+  rob_trimboot_summary_ij <- tibble::tibble(
+    rob_trimboot_p = unlist(rob_trimboot_mod_ij[-c(4,5,6,7)]), 
+    rob_trimboot_warn_count = unlist(rob_trimboot_mod_ij[4]), 
+    rob_trimboot_warns = unlist(rob_trimboot_mod_ij[5]), 
+    rob_trimboot_error_count = unlist(rob_trimboot_mod_ij[6]),
+    rob_trimboot_errors = unlist(rob_trimboot_mod_ij[7])
+  )
+  
+  afex_int_b <- WRS::bwmcp(2,2, wrs_list, tr = 0, nboot = 2)$Fac.AB[2]
+  rob_trim_int_b <- WRS::bwmcp(2,2, wrs_list, tr = 0.2, nboot = 2)$Fac.AB[2]
+  
+  dplyr::bind_cols(
+    afex_summary_ij, 
+    rob_trim_summary_ij, 
+    rob_boot_summary_ij, 
+    rob_trimboot_summary_ij, 
+    afex_int_b = afex_int_b, rob_trim_int_b = rob_trim_int_b
+  )
+  
+}
+```
+
+Iterate: 
+
+```{r message=FALSE}
+set.seed(global_seed)
+
+cat_2w2b_unique_populations <- cat_2w2b_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2w2b_n_pop <- nrow(cat_2w2b_unique_populations)
+
+for(i in 1:cat_2w2b_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2w2b_n_pop)
+  
+  pop_row_i <- cat_2w2b_unique_populations[i, ]
+  pop_i <- generate_cat2w2b(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift_1 = pop_row_i$sigma_shift_1, sigma_shift_2 = pop_row_i$sigma_shift_2, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  pop_i_gb1 <- pop_i |> dplyr::filter(between_group == "gb1") 
+  pop_i_gb2 <- pop_i |> dplyr::filter(between_group == "gb2") 
+  
+  grid_i <- cat_2w2b_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(
+        .progress = TRUE, 
+        .l = list(
+          pop_i_gb1 = list(pop_i_gb1),
+          pop_i_gb2 = list(pop_i_gb2),
+          n_rm = n_rm, 
+          n_ratio = n_ratio
+        ), 
+        .f = cat_2w2b_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+
+### CAT-2W-2W-2W
+
+Generate grid:
+
+```{r message=FALSE}
+cat_2w2w2w <- readr::read_csv("../data/simulation_grids/CAT-2W-2W-2W.csv")
+
+cat_2w2w2w_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2W-2W-2W", 
+    combo_id = cat_2w2w2w$combo_id,
+    b, n_rm, 
+    iter = 1:n_iter
+  ), 
+  cat_2w2w2w |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+
+generate_cat2w2w2w <- function(
+    n = 100000, 
+    b, 
+    b_shift_1 = 0, 
+    b_shift_2 = 0, 
+    sigma = 1, 
+    sigma_shift_1, 
+    sigma_shift_2,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    within = list(c("gw1", "gw2"), factor_2 = c("a", "b"), factor_3 = c(".", "..")),
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      `gw1_a_.` = transform_norm(raw_var = `gw1_a_.`, mu = 0, nu = nu, tau = tau, sigma = sigma),
+      `gw1_a_..` = transform_norm(raw_var = `gw1_a_..`, mu = 0, nu = nu, tau = tau, sigma = sigma) + b,
+      `gw1_b_.` = transform_norm(raw_var = `gw1_b_.`, mu = 0, nu = nu, tau = tau, sigma = sigma) + b,
+      `gw1_b_..` = transform_norm(raw_var = `gw1_b_..`, mu = 0, nu = nu, tau = tau, sigma = sigma + sigma_shift_1) + 3*b + b_shift_1,
+      
+      `gw2_a_.` = transform_norm(raw_var = `gw2_a_.`, mu = 0, nu = nu, tau = tau, sigma = sigma) + b,
+      `gw2_a_..` = transform_norm(raw_var = `gw2_a_..`, mu = 0, nu = nu, tau = tau, sigma = sigma) + 3*b,
+      `gw2_b_.` = transform_norm(raw_var = `gw2_b_.`, mu = 0, nu = nu, tau = tau, sigma = sigma) + 3*b,
+      `gw2_b_..` = transform_norm(raw_var = `gw2_b_..`, mu = 0, nu = nu, tau = tau, sigma = sigma + sigma_shift_2) + 7*b + b_shift_2,
+    )
+  
+  return(transformed_df)
+}
+
+
+## sample fit and save
+cat_2w2w2w_sfs <- function(pop_i, n_rm){
+  
+  ## create a sample   
+  sample_ij <- dplyr::slice_sample(.data = pop_i, n = n_rm)
+  #sample_ij <- dplyr::slice_sample(.data = pop_i, n = 18)
+  
+  ## fit ols model 
+  
+  sample_ij_long <- sample_ij |> 
+    tidyr::pivot_longer(-id, names_to = "gw", values_to = "y") |> 
+    dplyr::mutate(
+      gw1 = as.character(readr::parse_number(gw)),
+      gw2 = ifelse(stringr::str_detect(gw, "a"), "a", "b"), 
+      gw3 = ifelse(stringr::str_detect(gw, "\\.{2}"), "..", ".")
+    ) 
+  
+  afex_summary_ij <- afex_nc_gg_summary("y ~ gw1*gw2*gw3 + (gw1*gw2*gw3|id)", data = sample_ij_long)
+  
+  ## fit robust model(s)
+  
+  rob_trim_mod_ij <- WRS:::wwwtrim(2,2,2, sample_ij[-1], tr = 0.2)
+  rob_trim_summary_ij <- tibble::tibble(
+    rob_trim_statistic = unlist(rob_trim_mod_ij[grep(pattern = "p.value",  names(rob_trim_mod_ij), invert = TRUE)]), 
+    rob_trim_p = unlist(rob_trim_mod_ij[grep(pattern = "p.value",  names(rob_trim_mod_ij), invert = FALSE)])
+  )
+  
+  rob_boot_summary_ij <- tibble::tibble(
+    boot_p = unlist(WRS::wwwtrimbt(2,2,2, sample_ij[-1], tr = 0, SEED = FALSE))
+  )
+  
+  rob_trimboot_summary_ij <- tibble::tibble(
+    trimboot_p = unlist(WRS::wwwtrimbt(2,2,2, sample_ij[-1], tr = 0.2, SEED = FALSE))
+  )
+  
+  afex_int_b <- WRS::rm3mcp(2,2,2, sample_ij[-1], tr = 0)$Factor.ABC$psihat[2]
+  rob_trim_int_b <- WRS::rm3mcp(2,2,2, sample_ij[-1], tr = 0.2)$Factor.ABC$psihat[2]
+  
+  dplyr::bind_cols(
+    afex_summary_ij, rob_trim_summary_ij, rob_boot_summary_ij, rob_trimboot_summary_ij, 
+    afex_int_b = afex_int_b, rob_trim_int_b = rob_trim_int_b
+  )
+  
+}
+```
+
+Iterate: 
+
+```{r}
+set.seed(global_seed)
+
+cat_2w2w2w_unique_populations <- cat_2w2w2w_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2w2w2w_n_pop <- nrow(cat_2w2w2w_unique_populations)
+
+cat_2w2w2w_sim_results <- data.frame()
+
+for(i in 1:cat_2w2w2w_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2w2w2w_n_pop)
+  
+  pop_row_i <- cat_2w2w2w_unique_populations[i, ]
+  pop_i <- generate_cat2w2w2w(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift_1 = pop_row_i$sigma_shift_1, sigma_shift_2 = pop_row_i$sigma_shift_2, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  grid_i <- cat_2w2w2w_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(
+        .progress = TRUE, 
+        .l = list(
+          pop_i = list(pop_i),
+          n_rm = n_rm
+        ), 
+        .f = cat_2w2w2w_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+### CAT-2W-2W-2B
+
+Generate grid:
+
+```{r message=FALSE}
+cat_2w2w2b <- readr::read_csv("../data/simulation_grids/CAT-2W-2W-2B.csv")
+
+cat_2w2w2b_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2W-2W-2B", 
+    combo_id = cat_2w2w2b$combo_id,
+    b, n_rm, 
+    n_ratio = n_ratio_rm, 
+    iter = 1:n_iter
+  ), 
+  cat_2w2w2b |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+
+generate_cat2w2w2b <- function(
+    n = 100000, 
+    b, 
+    b_shift_1 = 0, 
+    b_shift_2 = 0, 
+    sigma = 1, 
+    sigma_shift_1, 
+    sigma_shift_2,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed)
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    within = list(
+      factor_1 = c("1", "2"), factor_2 = c("a", "b")
+    ), 
+    between = list(gb1 = c(".", "..")),
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      `1_a` = dplyr::case_when(
+        gb1 ==  "." ~ transform_norm(raw_var = `1_a`, mu = 0, nu = nu, tau = tau, sigma = sigma),
+        gb1 == ".." ~ transform_norm(raw_var = `1_a`, mu = 0, nu = nu, tau = tau, sigma = sigma) + b,
+      ), 
+      `1_b` = dplyr::case_when(
+        gb1 ==  "." ~ transform_norm(raw_var = `1_b`, mu = 0, nu = nu, tau = tau, sigma = sigma) + b,
+        gb1 == ".." ~ transform_norm(raw_var = `1_b`, mu = 0, nu = nu, tau = tau, sigma = sigma + sigma_shift_1) + 3*b + b_shift_1,
+      ), 
+      `2_a` = dplyr::case_when(
+        gb1 ==  "." ~ transform_norm(raw_var = `2_a`, mu = 0, nu = nu, tau = tau, sigma = sigma) + b,
+        gb1 == ".." ~ transform_norm(raw_var = `2_a`, mu = 0, nu = nu, tau = tau, sigma = sigma) + 3*b,
+      ), 
+      `2_b` = dplyr::case_when(
+        gb1 ==  "." ~ transform_norm(raw_var = `2_b`, mu = 0, nu = nu, tau = tau, sigma = sigma) + 3*b,
+        gb1 == ".." ~ transform_norm(raw_var = `2_b`, mu = 0, nu = nu, tau = tau, sigma = sigma + sigma_shift_2) + 7*b + b_shift_2,
+      )
+    )
+  
+  return(transformed_df)
+}
+
+bwwtrim_wrapper <- function(J, K, L, bsam, tr){
+  warn_increase <- 0
+  warn_message <- NULL
+  
+  bwwtrim_result <- withCallingHandlers(
+    
+    WRS::bwwtrim(J, K, L, bsam, tr = tr),
+    
+    warning = function(w) {
+      warn_increase <<- 1
+      warn_message <<- paste0(w)
+    }
+  )
+  
+  bwwtrim_result$warn_increase <- warn_increase
+  bwwtrim_result$warn_message <- warn_message
+  
+  return(bwwtrim_result)
+}
+
+bwwtrim_error_wrapper <- function(J, K, L, bsam, tr){
+  tryCatch(
+    bwwtrim_wrapper(J, K, L, bsam, tr) |> suppressWarnings(),
+    error = function(e) {
+      paste0(e)
+    }
+  )
+}
+
+bwwtrimbt_mod <- function (J, K, L, x, tr = 0.2, JKL = J * K * L, con = 0, alpha = 0.05, 
+  grp = c(1:JKL), nboot = 599, SEED = FALSE, ...) 
+{
+  if (is.data.frame(x)) 
+    data = as.matrix(x)
+  if (is.matrix(x)) {
+    y <- list()
+    for (j in 1:ncol(x)) y[[j]] <- x[, j]
+    x <- y
+  }
+  conM = con3way(J, K, L)
+  p <- J * K * L
+  if (p > length(x)) 
+    stop("JKL is less than the Number of groups")
+  JK = J * K
+  KL = K * L
+  v <- matrix(0, p, p)
+  data <- list()
+  xx = list()
+  for (j in 1:length(x)) {
+    data[[j]] <- x[[grp[j]]]
+    xx[[j]] = x[[grp[j]]]
+    data[[j]] = data[[j]] - mean(data[[j]], tr = tr)
+  }
+  x <- data
+  test = bwwtrim(J, K, L, xx, tr = tr)
+  if (SEED) 
+    set.seed(2)
+  bsam = list()
+  bdat = list()
+  
+  warn_count = 0
+  warn_vec <- NULL
+  error_count = 0
+  error_vec <- NULL
+  
+  aboot = NA
+  bboot = NA
+  cboot = NA
+  abboot = NA
+  acboot = NA
+  bcboot = NA
+  abcboot = NA
+  for (ib in 1:nboot) {
+    ilow <- 1 - KL
+    iup = 0
+    for (j in 1:J) {
+      ilow <- ilow + KL
+      iup = iup + KL
+      nv = length(x[[ilow]])
+      bdat[[j]] = sample(nv, size = nv, replace = TRUE)
+      for (k in ilow:iup) {
+        bsam[[k]] = x[[k]][bdat[[j]]]
+      }
+    }
+    temp = bwwtrim_error_wrapper(J, K, L, bsam, tr = tr)
+    
+    if(is.character(temp)){
+      
+      aboot[ib] = NA
+      bboot[ib] = NA
+      cboot[ib] = NA
+      acboot[ib] = NA
+      bcboot[ib] = NA
+      abboot[ib] = NA
+      abcboot[ib] = NA
+      
+      error_count = 0
+      error_vec <- c(error_vec, temp)
+      
+    } else {
+    
+      warn_count = c(warn_count, temp$warn_increase)
+      warn_vec = c(warn_vec, temp$warn_message)
+      
+      aboot[ib] = temp$Qa
+      bboot[ib] = temp$Qb
+      cboot[ib] = temp$Qc
+      acboot[ib] = temp$Qac
+      bcboot[ib] = temp$Qbc
+      abboot[ib] = temp$Qab
+      abcboot[ib] = temp$Qabc
+      
+    }
+
+  }
+  
+  pbA = NA
+  pbB = NA
+  pbC = NA
+  pbAB = NA
+  pbAC = NA
+  pbBC = NA
+  pbABC = NA
+  pbA = mean(test$Qa[1, 1] < aboot, na.rm = TRUE)
+  pbB = mean(test$Qb[1, 1] < bboot, na.rm = TRUE)
+  pbC = mean(test$Qc[1, 1] < cboot, na.rm = TRUE)
+  pbAB = mean(test$Qab[1, 1] < abboot, na.rm = TRUE)
+  pbAC = mean(test$Qac[1, 1] < acboot, na.rm = TRUE)
+  pbBC = mean(test$Qbc[1, 1] < bcboot, na.rm = TRUE)
+  pbABC = mean(test$Qabc[1, 1] < abcboot, na.rm = TRUE)
+  
+  list(p.value.A = pbA, p.value.B = pbB, p.value.C = pbC, 
+       p.value.AB = pbAB, p.value.AC = pbAC, p.value.BC = pbBC, 
+       p.value.ABC = pbABC, 
+       warn_count = sum(warn_count), 
+       warn_message = ifelse(is.null(warn_vec), NA_character_, paste0(unique(warn_vec), sep = ";")), 
+       error_count = error_count, 
+       error_message = ifelse(is.null(error_vec), NA_character_, paste0(unique(error_vec), sep = ";"))
+  )
+}
+
+
+## sample fit and save
+cat_2w2w2b_sfs <- function(pop_i_., pop_i_.., n_rm, n_ratio){
+  
+  ## calculate sample split 
+  n1n2 <- sample_n_from_ratio_rm(n_rm, n_ratio)
+  #n1n2 <- sample_n_from_ratio_rm(18, 2)
+  
+  ## create a sample   
+  sample_ij <- dplyr::bind_rows(
+    pop_i_. |> dplyr::slice_sample(n = n1n2[["n1"]]), 
+    pop_i_.. |> dplyr::slice_sample(n = n1n2[["n2"]]) 
+  )
+  
+  ## fit ols model 
+  
+  sample_ij_long <- sample_ij |> 
+    tidyr::pivot_longer(-c(id, gb1), names_to = "gw", values_to = "y") |> 
+    dplyr::mutate(
+      gw1 = ifelse(stringr::str_detect(gw, "1"), "1", "2"), 
+      gw2 = ifelse(stringr::str_detect(gw, "a"), "a", "b")
+    ) 
+  
+  afex_summary_ij <-  afex_nc_gg_summary("y ~ gb1*gw1*gw2 + (gw1*gw2|id)", data = sample_ij_long) |> 
+    dplyr::arrange(afex_nc_term)
+  
+  wrs_df <- list(
+    dplyr::filter(sample_ij_long, gb1 == ".", gw1 == "1", gw2 == "a")$y, 
+    dplyr::filter(sample_ij_long, gb1 == ".", gw1 == "1", gw2 == "b")$y, 
+    dplyr::filter(sample_ij_long, gb1 == ".", gw1 == "2", gw2 == "a")$y, 
+    dplyr::filter(sample_ij_long, gb1 == ".", gw1 == "2", gw2 == "b")$y,
+    
+    dplyr::filter(sample_ij_long, gb1 == "..", gw1 == "1", gw2 == "a")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "..", gw1 == "1", gw2 == "b")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "..", gw1 == "2", gw2 == "a")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "..", gw1 == "2", gw2 == "b")$y
+  )
+  
+  if(any(n1n2 < 12)){nboot = 1000
+  } else{nboot = 599}
+  
+  rob_trim_mod_ij <- WRS::bwwtrim(2,2,2, wrs_df, tr = 0.2)
+  rob_trim_summary_ij <- tibble::tibble(
+    rob_trim_term = names(rob_trim_mod_ij[grep(pattern = "p.value",  names(rob_trim_mod_ij), invert = TRUE)]),
+    rob_trim_statistic = unlist(rob_trim_mod_ij[grep(pattern = "p.value",  names(rob_trim_mod_ij), invert = TRUE)]), 
+    rob_trim_p = unlist(rob_trim_mod_ij[grep(pattern = "p.value",  names(rob_trim_mod_ij), invert = FALSE)])
+  ) |> dplyr::arrange(rob_trim_term)
+  
+  rob_boot_mod_ij <- bwwtrimbt_mod(2,2,2, wrs_df, tr = 0, SEED = FALSE, nboot = nboot) |> suppressWarnings()
+  rob_boot_summary_ij <- tibble::tibble(
+    rob_boot_term = names(rob_boot_mod_ij[grep(pattern = "p.value",  names(rob_boot_mod_ij), invert = FALSE)]),
+    rob_boot_p = unlist(rob_boot_mod_ij[grep(pattern = "p.value",  names(rob_boot_mod_ij), invert = FALSE)]), 
+    rob_boot_warn_count = unlist(rob_boot_mod_ij[grep(pattern = "warn_count",  names(rob_boot_mod_ij), invert = FALSE)]), 
+    rob_boot_warn_message = unlist(rob_boot_mod_ij[grep(pattern = "warn_message",  names(rob_boot_mod_ij), invert = FALSE)]),
+    rob_boot_error_count = unlist(rob_boot_mod_ij[grep(pattern = "error_count",  names(rob_boot_mod_ij), invert = FALSE)]), 
+    rob_boot_error_message = unlist(rob_boot_mod_ij[grep(pattern = "error_message",  names(rob_boot_mod_ij), invert = FALSE)])
+  ) |> dplyr::arrange(rob_boot_term)
+  
+  rob_trimboot_mod_ij <- bwwtrimbt_mod(2,2,2, wrs_df, tr = 0.2, SEED = FALSE, nboot = nboot) |> suppressWarnings()
+  rob_trimboot_summary_ij <- tibble::tibble(
+    rob_trimboot_term = names(rob_trimboot_mod_ij[grep(pattern = "p.value",  names(rob_trimboot_mod_ij), invert = FALSE)]),
+    rob_trimboot_p = unlist(rob_trimboot_mod_ij[grep(pattern = "p.value",  names(rob_trimboot_mod_ij), invert = FALSE)]), 
+    rob_trimboot_warn_count = unlist(rob_trimboot_mod_ij[grep(pattern = "warn_count",  names(rob_trimboot_mod_ij), invert = FALSE)]), 
+    rob_trimboot_warn_message = unlist(rob_trimboot_mod_ij[grep(pattern = "warn_message",  names(rob_trimboot_mod_ij), invert = FALSE)]),
+    rob_trimboot_error_count = unlist(rob_trimboot_mod_ij[grep(pattern = "error_count",  names(rob_trimboot_mod_ij), invert = FALSE)]), 
+    rob_trimboot_error_message = unlist(rob_trimboot_mod_ij[grep(pattern = "error_message",  names(rob_trimboot_mod_ij), invert = FALSE)])
+  ) |> dplyr::arrange(rob_trimboot_term)
+  
+  afex_int_b <- WRS::bwwmcp(2,2,2, wrs_df, tr = 0, nboot = 2)$Fac.ABC[2]
+  rob_trim_int_b <- WRS::bwwmcp(2,2,2, wrs_df, tr = 0.2, nboot = 2)$Fac.ABC[2]
+  
+  dplyr::bind_cols(
+    afex_summary_ij, rob_trim_summary_ij, rob_boot_summary_ij, rob_trimboot_summary_ij, 
+    afex_int_b = afex_int_b,rob_trim_int_b = rob_trim_int_b
+  )
+  
+}
+```
+
+
+Iterate: 
+
+```{r message=FALSE}
+set.seed(global_seed)
+
+cat_2w2w2b_unique_populations <- cat_2w2w2b_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2w2w2b_n_pop <- nrow(cat_2w2w2b_unique_populations)
+
+
+for(i in 1:cat_2w2w2b_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2w2w2b_n_pop)
+  
+  pop_row_i <- cat_2w2w2b_unique_populations[i, ]
+  pop_i <- generate_cat2w2w2b(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift_1 = pop_row_i$sigma_shift_1, sigma_shift_2 = pop_row_i$sigma_shift_2, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  pop_i_. <- pop_i |> dplyr::filter(gb1 == ".")
+  pop_i_.. <- pop_i |> dplyr::filter(gb1 == "..")
+  
+  grid_i <- cat_2w2w2b_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(
+        .progress = TRUE, 
+        .l = list(
+          pop_i_. = list(pop_i_.),
+          pop_i_.. = list(pop_i_..),
+          n_rm = n_rm, 
+          n_ratio = n_ratio
+        ), 
+        .f = cat_2w2w2b_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+
+```
+
+
+### CAT-2W-2B-2B
+
+Generate grid:
+
+```{r message=FALSE}
+cat_2w2b2b <- readr::read_csv("../data/simulation_grids/CAT-2W-2B-2B.csv")
+
+cat_2w2b2b_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2W-2B-2B", 
+    combo_id = cat_2w2b2b$combo_id,
+    b, n_rm, 
+    n_ratio = n_ratio_rm, 
+    iter = 1:n_iter
+  ), 
+  cat_2w2b2b |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+
+generate_cat2w2b2b <- function(
+    n = 100000, 
+    b, 
+    b_shift_1 = 0, 
+    b_shift_2 = 0, 
+    sigma = 1, 
+    sigma_shift_1, 
+    sigma_shift_2,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    within = list(
+      factor_1 = c("1", "2")
+    ), 
+    between = list(gb2 = c(".", ".."), gb1 = c("a", "b")), 
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      `1` = dplyr::case_when(
+        gb1 ==  "a" & gb2 == "." ~ transform_norm(raw_var = `1`, mu = 0, nu = nu, tau = tau, sigma = sigma),
+        gb1 ==  "a" & gb2 == ".." ~ transform_norm(raw_var = `1`, mu = 0, nu = nu, tau = tau, sigma = sigma) + b,
+        gb1 ==  "b" & gb2 == "." ~ transform_norm(raw_var = `1`, mu = 0, nu = nu, tau = tau, sigma = sigma) + b,
+        gb1 ==  "b" & gb2 == ".." ~ transform_norm(raw_var = `1`, mu = 0, nu = nu, tau = tau, 
+                                                   sigma = sigma + sigma_shift_1) + 3*b + b_shift_1,
+      ), 
+      `2` = dplyr::case_when(
+        gb1 ==  "a" & gb2 == "." ~ transform_norm(raw_var = `2`, mu = 0, nu = nu, tau = tau, sigma = sigma) + b,
+        gb1 ==  "a" & gb2 == ".." ~ transform_norm(raw_var = `2`, mu = 0, nu = nu, tau = tau, sigma = sigma) + 3*b,
+        gb1 ==  "b" & gb2 == "." ~ transform_norm(raw_var = `2`, mu = 0, nu = nu, tau = tau, sigma = sigma) + 3*b,
+        gb1 ==  "b" & gb2 == ".." ~ transform_norm(raw_var = `2`, mu = 0, nu = nu, tau = tau, 
+                                                   sigma = sigma + sigma_shift_2) + 7*b + b_shift_2,
+      )
+    )
+  
+  return(transformed_df) 
+}
+
+bbwtrim_wrapper <- function(J, K, L, bsam, tr){
+  warn_increase <- 0
+  warn_message <- NULL
+  
+  bbwtrim_result <- withCallingHandlers(
+    
+    WRS::bbwtrim(J, K, L, bsam, tr = tr),
+    
+    warning = function(w) {
+      warn_increase <<- 1
+      warn_message <<- paste0(w)
+    }
+  )
+  
+  bbwtrim_result$warn_increase <- warn_increase
+  bbwtrim_result$warn_message <- warn_message
+  
+  return(bbwtrim_result)
+}
+
+bbwtrim_error_wrapper <- function(J, K, L, bsam, tr){
+  tryCatch(
+    bbwtrim_wrapper(J, K, L, bsam, tr) |> suppressWarnings(),
+    error = function(e) {
+      paste0(e)
+    }
+  )
+}
+
+
+bbwtrimbt_mod <- function (J, K, L, x, tr = 0.2, JKL = J * K * L, con = 0, alpha = 0.05, 
+  grp = c(1:JKL), nboot = 599, SEED = FALSE, ...) 
+{
+  
+  if (is.data.frame(x)) 
+    data = as.matrix(x)
+  if (is.matrix(x)) {
+    y <- list()
+    for (j in 1:ncol(x)) y[[j]] <- x[, j]
+    x <- y
+  }
+  p <- J * K * L
+  if (p > length(x)) 
+    stop("JKL is less than the Number of groups")
+  JK = J * K
+  v <- matrix(0, p, p)
+  data <- list()
+  xx = list()
+  for (j in 1:length(x)) {
+    data[[j]] <- x[[grp[j]]]
+    xx[[j]] = x[[grp[j]]]
+    data[[j]] = data[[j]] - mean(data[[j]], tr = tr)
+  }
+  test.stat = bbwtrim(J, K, L, xx, tr = tr) |> suppressWarnings()
+  x <- data
+  if (SEED) 
+    set.seed(2)
+  testA = NA
+  testB = NA
+  testC = NA
+  testAB = NA
+  testAC = NA
+  testBC = NA
+  testABC = NA
+  bsam = list()
+  bdat = list()
+  
+  warn_count = 0
+  warn_vec <- NULL
+  error_count = 0
+  error_vec <- NULL
+  
+  aboot = NA
+  bboot = NA
+  cboot = NA
+  abboot = NA
+  acboot = NA
+  bcboot = NA
+  abcboot = NA
+  nvec = NA
+  for (j in 1:JK) {
+    nvec[j] = length(x[[j]])
+    for (ib in 1:nboot) {
+      ilow <- 1 - L
+      iup = 0
+      for (j in 1:JK) {
+        ilow <- ilow + L
+        iup = iup + L
+        nv = length(x[[ilow]])
+        bdat[[j]] = sample(nv, size = nv, replace = TRUE)
+        for (k in ilow:iup) {
+          bsam[[k]] = x[[k]][bdat[[j]]]
+        }
+      }
+      temp = bbwtrim_error_wrapper(J, K, L, bsam, tr = tr) 
+      
+      if(is.character(temp)){
+      
+      aboot[ib] = NA
+      bboot[ib] = NA
+      cboot[ib] = NA
+      acboot[ib] = NA
+      bcboot[ib] = NA
+      abboot[ib] = NA
+      abcboot[ib] = NA
+      
+      error_count = error_count + 1
+      error_vec <- c(error_vec, temp)
+      
+    } else {
+    
+      warn_count = c(warn_count, temp$warn_increase)
+      warn_vec = c(warn_vec, temp$warn_message)
+      
+      aboot[ib] = temp$Qa
+      bboot[ib] = temp$Qb
+      cboot[ib] = temp$Qc
+      acboot[ib] = temp$Qac
+      bcboot[ib] = temp$Qbc
+      abboot[ib] = temp$Qab
+      abcboot[ib] = temp$Qabc
+      
+    }
+    }
+  }
+  pbA = NA
+  pbB = NA
+  pbC = NA
+  pbAB = NA
+  pbAC = NA
+  pbBC = NA
+  pbABC = NA
+  pbA = mean(test.stat$Qa[1, 1] < aboot, na.rm = TRUE)
+  pbB = mean(test.stat$Qb[1, 1] < bboot, na.rm = TRUE)
+  pbC = mean(test.stat$Qc[1, 1] < cboot, na.rm = TRUE)
+  pbAB = mean(test.stat$Qab[1, 1] < abboot, na.rm = TRUE)
+  pbAC = mean(test.stat$Qac[1, 1] < acboot, na.rm = TRUE)
+  pbBC = mean(test.stat$Qbc[1, 1] < bcboot, na.rm = TRUE)
+  pbABC = mean(test.stat$Qabc[1, 1] < abcboot, na.rm = TRUE)
+  list(p.value.A = pbA, p.value.B = pbB, p.value.C = pbC, 
+       p.value.AB = pbAB, p.value.AC = pbAC, p.value.BC = pbBC, 
+       p.value.ABC = pbABC,
+       warn_count = sum(warn_count), 
+       warn_message = ifelse(is.null(warn_vec), NA_character_, paste0(unique(warn_vec), sep = ";")), 
+       error_count = error_count, 
+       error_message = ifelse(is.null(error_vec), NA_character_, paste0(unique(error_vec), sep = ";"))
+  )
+}
+
+## sample fit and save
+cat_2w2b2b_sfs <- function(pop_i_gb1_a, pop_i_gb1_b, n_rm, n_ratio){
+  
+  n1n2 <- sample_n_from_ratio_rm(n_rm = n_rm, n_ratio = n_ratio)
+ # n1n2 <- sample_n_from_ratio_rm(n_rm = 18, n_ratio = 2)
+  
+  weight_col <- paste0("n_ratio_w_", n_ratio)
+  #weight_col <- paste0("n_ratio_w_", 2)
+  
+  sample_ij <- dplyr::bind_rows(
+    pop_i_gb1_a |> dplyr::slice_sample(n = n1n2[["n1"]], weight_by = (!!sym(weight_col))), 
+    pop_i_gb1_b |> dplyr::slice_sample(n = n1n2[["n2"]], weight_by = (!!sym(weight_col))) 
+  )
+  
+  n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+  
+  # must sample at least 2 for each cell and all groups must be represented
+  # in the cell grid 
+  while (any(n_cell_count < 2) | length(n_cell_count) < 4) {
+    
+    sample_ij <- dplyr::bind_rows(
+      pop_i_gb1_a |> dplyr::slice_sample(n = n1n2[["n1"]], weight_by = (!!sym(weight_col))), 
+      pop_i_gb1_b |> dplyr::slice_sample(n = n1n2[["n2"]], weight_by = (!!sym(weight_col))) 
+    )
+    
+    n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+    
+  }
+  
+  ## fit ols model 
+  
+  sample_ij_long <- sample_ij |> 
+    dplyr::select(!dplyr::contains("n_ratio")) |> 
+    tidyr::pivot_longer(-c(id, gb1, gb2), names_to = "gw", values_to = "y") 
+  
+  
+  afex_summary_ij <- afex_nc_gg_summary("y ~ gw*gb1*gb2 + (gw|id)", data = sample_ij_long) |>
+    dplyr::arrange(afex_nc_term)
+  
+
+  wrs_df <- list(
+    dplyr::filter(sample_ij_long, gb1 == "a", gb2 == ".",  gw == "1")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "a", gb2 == ".",  gw == "2")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "a", gb2 == "..", gw == "1")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "a", gb2 == "..", gw == "2")$y,
+    
+    dplyr::filter(sample_ij_long, gb1 == "b", gb2 == ".",  gw == "1")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "b", gb2 == ".",  gw == "2")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "b", gb2 == "..", gw == "1")$y, 
+    dplyr::filter(sample_ij_long, gb1 == "b", gb2 == "..", gw == "2")$y
+  )
+  
+  if(any(n_cell_count < 12)){nboot = 1000
+  } else{nboot = 599}
+  
+  rob_trim_mod_ij <- WRS::bbwtrim(2,2,2, wrs_df, tr = 0.2) 
+  rob_trim_summary_ij <- tibble::tibble(
+    rob_trim_term = names(rob_trim_mod_ij[grep(pattern = "p.value",  names(rob_trim_mod_ij), invert = TRUE)]),
+    rob_trim_statistic = unlist(rob_trim_mod_ij[grep(pattern = "p.value",  names(rob_trim_mod_ij), invert = TRUE)]), 
+    rob_trim_p = unlist(rob_trim_mod_ij[grep(pattern = "p.value",  names(rob_trim_mod_ij), invert = FALSE)])
+  ) |> dplyr::arrange(rob_trim_term)
+  
+  rob_boot_mod_ij <- bbwtrimbt_mod(2,2,2, wrs_df, tr = 0, SEED = FALSE, nboot = nboot) |> suppressWarnings()
+  rob_boot_summary_ij <- tibble::tibble(
+    rob_boot_term = names(rob_boot_mod_ij[grep(pattern = "p.value",  names(rob_boot_mod_ij), invert = FALSE)]),
+    rob_boot_p = unlist(rob_boot_mod_ij[grep(pattern = "p.value",  names(rob_boot_mod_ij), invert = FALSE)]), 
+    rob_boot_warn_count = unlist(rob_boot_mod_ij[grep(pattern = "warn_count",  names(rob_boot_mod_ij), invert = FALSE)]), 
+    rob_boot_warn_message = unlist(rob_boot_mod_ij[grep(pattern = "warn_message",  names(rob_boot_mod_ij), invert = FALSE)]),
+    rob_boot_error_count = unlist(rob_boot_mod_ij[grep(pattern = "error_count",  names(rob_boot_mod_ij), invert = FALSE)]), 
+    rob_boot_error_message = unlist(rob_boot_mod_ij[grep(pattern = "error_message",  names(rob_boot_mod_ij), invert = FALSE)])
+  ) |> dplyr::arrange(rob_boot_term)
+  
+  rob_trimboot_mod_ij <- bbwtrimbt_mod(2,2,2, wrs_df, tr = 0.2, SEED = FALSE, nboot = nboot) |> suppressWarnings()
+  rob_trimboot_summary_ij <- tibble::tibble(
+    rob_trimboot_term = names(rob_trimboot_mod_ij[grep(pattern = "p.value",  names(rob_trimboot_mod_ij), invert = FALSE)]),
+    rob_trimboot_p = unlist(rob_trimboot_mod_ij[grep(pattern = "p.value",  names(rob_trimboot_mod_ij), invert = FALSE)]), 
+    rob_trimboot_warn_count = unlist(rob_trimboot_mod_ij[grep(pattern = "warn_count",  names(rob_trimboot_mod_ij), invert = FALSE)]), 
+    rob_trimboot_warn_message = unlist(rob_trimboot_mod_ij[grep(pattern = "warn_message",  names(rob_trimboot_mod_ij), invert = FALSE)]),
+    rob_trimboot_error_count = unlist(rob_trimboot_mod_ij[grep(pattern = "error_count",  names(rob_trimboot_mod_ij), invert = FALSE)]), 
+    rob_trimboot_error_message = unlist(rob_trimboot_mod_ij[grep(pattern = "error_message",  names(rob_trimboot_mod_ij), invert = FALSE)])
+  ) |> dplyr::arrange(rob_trimboot_term)
+  
+  afex_int_b <- suppressWarnings(WRS::bbwmcp(2,2,2, wrs_df, tr = 0, nboot = 2)$Fac.ABC[2])
+  rob_trim_int_b <- suppressWarnings(WRS::bbwmcp(2,2,2, wrs_df, tr = 0.2, nboot = 2)$Fac.ABC[2])
+  
+  dplyr::bind_cols(
+    afex_summary_ij, rob_trim_summary_ij, rob_boot_summary_ij, rob_trimboot_summary_ij, 
+    afex_int_b = afex_int_b,rob_trim_int_b = rob_trim_int_b
+  )
+  
+  
+}
+```
+
+Iterate: 
+
+```{r message=FALSE}
+set.seed(global_seed)
+
+cat_2w2b2b_unique_populations <- cat_2w2b2b_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2w2b2b_n_pop <- nrow(cat_2w2b2b_unique_populations)
+
+for(i in 1:cat_2w2b2b_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2w2b2b_n_pop)
+  
+  pop_row_i <- cat_2w2b2b_unique_populations[i, ]
+  
+  grid_i <- cat_2w2b2b_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  n_ratios <- sort(unique(grid_i$n_ratio))
+  
+  pop_i <- generate_cat2w2b2b(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift_1 = pop_row_i$sigma_shift_1, sigma_shift_2 = pop_row_i$sigma_shift_2, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  pop_i[[paste0("n_ratio_w_", n_ratios[1])]] <- ifelse(pop_i$gb2 == ".." , n_ratios[1], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[2])]] <- ifelse(pop_i$gb2 == ".." , n_ratios[2], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[3])]] <- ifelse(pop_i$gb2 == ".." , n_ratios[3], 1)
+  
+  pop_i_gb1_a <- pop_i |> dplyr::filter(gb1 == "a")
+  pop_i_gb1_b <- pop_i |> dplyr::filter(gb1 == "b")
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i_gb1_a = list(pop_i_gb1_a),
+                                  pop_i_gb1_b = list(pop_i_gb1_b),
+                                  n_rm = n_rm, 
+                                  n_ratio = n_ratio
+                                ), 
+                                .f = cat_2w2b2b_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+
+### CAT-2W-1NUM
+
+```{r message=FALSE}
+cat_2w1num <- readr::read_csv("../data/simulation_grids/CAT-2W-1NUM.csv")
+
+cat_2w1num_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2w1num", 
+    combo_id = cat_2w1num$combo_id,
+    b, n_rm, 
+    iter = 1:n_iter
+  ), 
+  cat_2w1num |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+
+generate_cat2w1num <- function(
+    n, 
+    b, 
+    sigma = 1, 
+    sigma_shift, 
+    min_bound, 
+    max_bound, 
+    nu,
+    tau, 
+    vp_val, 
+    vp_fun, 
+    mod_fun
+){
+  
+  #generate covariate: 
+  cov = rnorm(n, 0, 1)
+  
+  #generate RM data: 
+  set.seed(global_seed) 
+  df <- faux::rnorm_multi(
+    n = n, vars = 2, r = 0.5, varnames = c(0, 1)
+  ) |> 
+    dplyr::mutate(id = 1:(n)) |> 
+    tidyr::pivot_longer(cols = -id, names_to = "gw",  values_to = "e") |> 
+    dplyr::arrange(gw) |> 
+    dplyr::mutate(
+      gw = as.numeric(gw), 
+      cov = c(cov, cov), 
+      e = transform_norm(raw_var = e, mu = 0, sigma = sigma, nu = nu, tau = tau),
+    )
+  
+  # calculate multipliers for setting up heteroscedasticty: 
+  cov_mult <- mod_fun(df$cov)
+  m_cont <- vp_fun(x = cov_mult, vp_val)
+  m_cat = ifelse(df$gw == 1, sigma + sigma_shift, sigma)
+  m_total = m_cont*m_cat
+  #m_total = 1
+  
+  # adjust errors and compute y
+  df <- df |> 
+    dplyr::mutate(
+      e = df$e * m_total,
+      e = squish(e, min_bound, max_bound), 
+      y = b*gw + b*cov + b*gw*cov + e
+    ) |> 
+    dplyr::select(-e)
+  
+  return(df)
+  
+}
+
+## sample fit and save
+cat_2w1num_sfs <- function(pop_i, n_rm){
+  
+  ## create a sample   
+  sample_ids <- sample(pop_i$id, size = n_rm, replace = FALSE)
+  #sample_ids <- sample(pop_i$id, size = 50, replace = FALSE)
+  sample_ij <- dplyr::filter(pop_i, id %in% sample_ids)
+  
+  afex_mod_ij <- afex::aov_4(y ~ gw*cov + (gw|id), data = sample_ij, factorize = FALSE) |> suppressWarnings()
+  afex_summary_ij <- afex_nc_gg_summary("y ~ gw*cov + (gw|id)", data = sample_ij, factorize = FALSE)
+  afex_params_ij <- modelbased::estimate_contrasts(
+    afex_mod_ij, contrast = "gw", fixed = "cov", adjust = "none") |> as.data.frame()
+  names(afex_params_ij) <- paste0("afex_params_", names(afex_params_ij))
+
+  x1_y1 = sample_ij |> dplyr::filter(gw == 0)
+  x2_y2 = sample_ij |> dplyr::filter(gw == 1)
+  
+  rob_trim_mod_ij <- WRS::Dancova(x1_y1$cov, x1_y1$y, x2_y2$cov, x2_y2$y, tr = 0.2, plotit = FALSE)$output[3, ] |> t() |> 
+    as.data.frame()
+  names(rob_trim_mod_ij) <- paste0("rob_trim_params_", names(rob_trim_mod_ij))
+  
+  rob_boot_mod_ij <- WRS::Dancovapb(x1_y1$cov, x1_y1$y, x2_y2$cov, x2_y2$y, tr = 0, plotit = FALSE)$output[3, ] |> t() |> 
+    as.data.frame()
+  names(rob_boot_mod_ij) <- paste0("rob_boot_params_", names(rob_boot_mod_ij))
+  
+  rob_trimboot_mod_ij <- WRS::Dancovapb(x1_y1$cov, x1_y1$y, x2_y2$cov, x2_y2$y, tr = 0.2, plotit = FALSE)$output[3, ] |> t() |> 
+    as.data.frame()
+  names(rob_trimboot_mod_ij) <- paste0("rob_trimboot_params_", names(rob_trimboot_mod_ij))
+  
+  dplyr::bind_cols(
+    afex_summary_ij, afex_params_ij, 
+    rob_trim_mod_ij, rob_boot_mod_ij, rob_trimboot_mod_ij
+  )
+}
+
+```
+
+
+Iterate: 
+
+```{r warning=FALSE}
+start_time = Sys.time()
+
+set.seed(global_seed)
+
+cat_2w1num_unique_populations <- cat_2w1num_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2w1num_n_pop <- nrow(cat_2w1num_unique_populations)
+
+
+for(i in 1:cat_2w1num_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2w1num_n_pop)
+  
+  pop_row_i <- cat_2w1num_unique_populations[i, ]
+  pop_i <- generate_cat2w1num(
+    n = n_population, b = pop_row_i$b,  
+    min_bound = pop_row_i$min_bound, max_bound = pop_row_i$max_bound, 
+    vp_fun = text_as_fun(pop_row_i$vp_fun), 
+    mod_fun = text_as_fun(pop_row_i$mod_fun),
+    vp_val = pop_row_i$vp_val, 
+    sigma_shift = pop_row_i$sigma_shift, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  grid_i <- cat_2w1num_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  ## sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(
+        .progress = TRUE, 
+        .l = list(
+          pop_i = list(pop_i),
+          n_rm = n_rm
+        ), 
+        .f = cat_2w1num_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+Grid accuracy testing: 
+
+```{r warning=FALSE, eval=FALSE}
+cat_2w1num_unique_populations <- cat_2w1num_combinations |> 
+  dplyr::filter(!duplicated(population_id)) |> 
+  dplyr::filter(b == 0.3)
+
+cat_2w1num_n_pop <- nrow(cat_2w1num_unique_populations)
+
+cat_2w1num_sim_results_check <- data.frame()
+
+
+quick_run <- function(i, nu = NA, tau = NA, vp_val = NA, sigma_shift = NA){
+  pop_row_i <- cat_2w1num_unique_populations[i, ]
+  
+  if(!is.na(nu)) pop_row_i$nu <- nu
+  if(!is.na(tau)) pop_row_i$tau <- tau
+  if(!is.na(vp_val)) pop_row_i$vp_val <- vp_val
+  if(!is.na(sigma_shift)) pop_row_i$sigma_shift <- sigma_shift
+  
+  pop_i <- generate_cat2w1num(
+    n = n_population, b = pop_row_i$b,  
+    min_bound = pop_row_i$min_bound, max_bound = pop_row_i$max_bound, 
+    vp_fun = text_as_fun(pop_row_i$vp_fun), 
+    mod_fun = text_as_fun(pop_row_i$mod_fun),
+    vp_val = pop_row_i$vp_val, 
+    sigma_shift = pop_row_i$sigma_shift, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  lm_mod <- lm(y ~ gw*cov, data = pop_i)
+  
+  pop_i <- broom::augment(lm_mod)
+  
+  betas <- coef(lm_mod)[2:4] |> t() |> tibble::as_tibble() 
+  
+  vr <- var(pop_i[which(pop_i$gw == 1), ]$.resid)/var(pop_i[which(pop_i$gw == 0), ]$.resid)
+  skew <- moments::skewness(lm_mod$residuals)
+  kurt <- (moments::kurtosis(lm_mod$residuals)) - 3
+  
+  quantreg_df <- quantreg_interval_pred_z_e(lm_mod$residuals, pop_i$cov)
+  quantreg_mod <- lm(loess_wide ~ x + I(x^2) + I(x^3) + I(x^4), data = quantreg_df)
+  qli_coeffs <- quantreg_mod_coefs(quantreg_mod) |> 
+    dplyr::select(2,3)
+  
+  cat_2w1num_sim_results_check_i <- tibble::tibble(
+    combo_id = pop_row_i$combo_id, 
+    betas, 
+    vr = vr, skew = skew, kurt = kurt, 
+    qli_coeffs
+  )
+  
+  cat_2w1num_sim_results_check <- rbind(
+    cat_2w1num_sim_results_check,
+    cat_2w1num_sim_results_check_i
+  )
+  
+  cat_2w1num_sim_results_check_i |> 
+    dplyr::select(-c(gw, cov, `gw:cov`))
+}
+
+combo_id = 11
+quick_run(combo_id)
+quick_run(combo_id, sigma_shift = 1.01, nu = 1.45, tau = 2.2, vp_val = 1.9)
+
+quick_run_df <- tibble::tibble()
+
+for (i in 1:33){
+  quick_run_df <- rbind(
+    quick_run_df,
+    quick_run(i = i))
+}
+
+cat_2w1num_unique_populations |> 
+  dplyr::left_join(x = _, quick_run_df) |> 
+  dplyr::transmute(
+    combo_id, 
+    target_het, `quantreg_I(x^2)`, quantreg_x
+  )
+```
+
+
+## Between-subjects designs 
+
+### CAT-2B 
+
+```{r message=FALSE}
+cat_2b <- readr::read_csv("../data/simulation_grids/CAT-2B.csv")
+
+cat_2b_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2B", 
+    combo_id = cat_2b$combo_id,
+    b, n_bw, 
+    n_ratio = n_ratio_bw, 
+    iter = 1:n_iter
+  ), 
+  cat_2b |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+# Generate population function: 
+
+generate_cat2b <- function(
+    n = 100000, 
+    b, 
+    b_shift = 0, 
+    sigma = 1, 
+    sigma_shift,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    between = list(gb1 = c("a", "b")), 
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      y = dplyr::case_when(
+        gb1 == "a" ~ transform_norm(raw_var = y, mu = 0, sigma = sigma, nu = nu, tau = tau),
+        gb1 == "b" ~ transform_norm(raw_var = y, mu = 0, sigma = (sigma+sigma_shift), nu = nu, tau = tau) + (b + b_shift)
+      )
+    )
+  
+  return(transformed_df)
+}
+
+
+
+# Sample fit and save
+cat_2b_sfs <- function(pop_i_a, pop_i_b , n_bw, n_ratio){
+  
+  ## calculate sample split 
+  n1n2 <- sample_n_from_ratio_bw2(n_bw, n_ratio)
+  # n1n2 <- sample_n_from_ratio_bw2(100, 2)
+  
+  ## create a sample   
+  sample_ij <- dplyr::bind_rows(
+    pop_i_a |> dplyr::slice_sample(n = n1n2[["n1"]]), 
+    pop_i_b |> dplyr::slice_sample(n = n1n2[["n2"]]) 
+  )
+  
+  ## fit models
+  
+  fit_and_summarise_mods_bw(mod_formula = "y~gb1", sample_ij = sample_ij)
+  
+}
+```
+
+
+Iterate: 
+
+```{r message=FALSE}
+set.seed(global_seed)
+
+cat_2b_unique_populations <- cat_2b_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2b_n_pop <- nrow(cat_2b_unique_populations)
+
+for(i in 1:cat_2b_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2b_n_pop)
+  
+  pop_row_i <- cat_2b_unique_populations[i, ]
+  pop_i <- generate_cat2b(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift = pop_row_i$sigma_shift, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  pop_i_a <- pop_i |> dplyr::filter(gb1 == "a") 
+  pop_i_b <- pop_i |> dplyr::filter(gb1 == "b") 
+  
+  grid_i <- cat_2b_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(
+        .progress = TRUE, 
+        .l = list(
+          pop_i_a = list(pop_i_a),
+          pop_i_b = list(pop_i_b),
+          n_bw = n_bw, 
+          n_ratio = n_ratio
+        ), 
+        .f = cat_2b_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+
+### CAT-3B 
+
+
+```{r message=FALSE}
+cat_3b <- readr::read_csv("../data/simulation_grids/CAT-3B.csv")
+
+cat_3b_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-3B", 
+    combo_id = cat_3b$combo_id,
+    b, n_bw, 
+    n_ratio = n_ratio_bw, 
+    iter = 1:n_iter
+  ), 
+  cat_3b |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+# Generate population function: 
+
+generate_cat3b <- function(
+    n = 100000, 
+    b, 
+    b_shift = 0, 
+    sigma = 1, 
+    sigma_shift,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    between = list(gb1 = c("a", "b", "c")), 
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      y = dplyr::case_when(
+        gb1 == "a" ~ transform_norm(raw_var = y, mu = 0, sigma = sigma, nu = nu, tau = tau),
+        gb1 == "b" ~ transform_norm(raw_var = y, mu = 0, sigma = (sigma), nu = nu, tau = tau) + b,
+        gb1 == "c" ~ transform_norm(raw_var = y, mu = 0, sigma = (sigma+sigma_shift), nu = nu, tau = tau) + (b + b_shift)
+      )
+    )
+  
+  return(transformed_df)
+}
+
+## sample fit and save
+cat_3b_sfs <- function(pop_i_a, pop_i_b , pop_i_c, n_bw, n_ratio){
+  
+  ## calculate sample split 
+  ns <- sample_n_from_ratio_bw3(n_bw, n_ratio)
+  
+  ## create a sample   
+  sample_ij <- dplyr::bind_rows(
+    pop_i_a |> dplyr::slice_sample(n = ns[["n1"]]), 
+    pop_i_b |> dplyr::slice_sample(n = ns[["n2"]]), 
+    pop_i_c |> dplyr::slice_sample(n = ns[["n3"]]) 
+  )
+  
+  # Fit models and export: 
+  fit_and_summarise_mods_bw(mod_formula = "y~gb1", sample_ij = sample_ij)
+  
+}
+```
+
+Iterate: 
+
+```{r message=FALSE}
+set.seed(global_seed)
+
+cat_3b_unique_populations <- cat_3b_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_3b_n_pop <- nrow(cat_3b_unique_populations)
+
+for(i in 1:cat_3b_n_pop){
+  
+  show_progress(i = i, n_pop = cat_3b_n_pop)
+  
+  pop_row_i <- cat_3b_unique_populations[i, ]
+  pop_i <- generate_cat3b(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift = pop_row_i$sigma_shift, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  pop_i_a <- pop_i |> dplyr::filter(gb1 == "a") 
+  pop_i_b <- pop_i |> dplyr::filter(gb1 == "b") 
+  pop_i_c <- pop_i |> dplyr::filter(gb1 == "c") 
+  
+  grid_i <- cat_3b_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(
+        .progress = TRUE, 
+        .l = list(
+          pop_i_a = list(pop_i_a),
+          pop_i_b = list(pop_i_b),
+          pop_i_c = list(pop_i_c),
+          n_bw = n_bw, 
+          n_ratio = n_ratio
+        ), 
+        .f = cat_3b_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+
+### CAT-2B-2B
+
+```{r message=FALSE}
+cat_2b2b <- readr::read_csv("../data/simulation_grids/CAT-2B-2B.csv")
+
+cat_2b2b_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2B-2B", 
+    combo_id = cat_2b2b$combo_id,
+    b, n_bw, 
+    n_ratio = n_ratio_bw, 
+    iter = 1:n_iter
+  ), 
+  cat_2b2b |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+
+generate_cat2b2b <- function(
+    n = 100000, 
+    b, 
+    b_shift_1 = 0, 
+    b_shift_2 = 0, 
+    sigma = 1, 
+    sigma_shift_1, 
+    sigma_shift_2,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    between = list(
+      gb1 = c("a", "b"), 
+      gb2 = c("1", "2")
+    ),
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      y = dplyr::case_when(
+        gb1 == "a" & gb2 == "1" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma),
+        gb1 == "a" & gb2 == "2" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma + sigma_shift_1) + b + b_shift_1,
+        gb1 == "b" & gb2 == "1" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        gb1 == "b" & gb2 == "2" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma + sigma_shift_2) + 2*b + b_shift_2,
+      )
+    )
+  
+  return(transformed_df)
+}
+
+## sample fit and save
+cat_2b2b_sfs <- function(pop_i_gb1_a, pop_i_gb1_b, n_bw, n_ratio){
+  
+  ns <- sample_n_from_ratio_bw2(n_bw = n_bw, n_ratio = n_ratio)
+  
+  weight_col <- paste0("n_ratio_w_", n_ratio)
+  
+  sample_ij <- dplyr::bind_rows(
+    pop_i_gb1_a |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+    pop_i_gb1_b |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))) 
+  )
+  
+  n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+  
+  # must sample at least 2 for each cell and all groups must be represented
+  # in the cell grid 
+  while (any(n_cell_count < 2) | length(n_cell_count) < 4) {
+    
+    sample_ij <- dplyr::bind_rows(
+      pop_i_gb1_a |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+      pop_i_gb1_b |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))) 
+    )
+    
+    n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+    
+  }
+  
+  ## fit ols model 
+  
+  sample_ij <- sample_ij |> dplyr::select(!dplyr::contains("n_ratio"))
+  
+  # Fit models and export: 
+  fit_and_summarise_mods_bw(mod_formula = "y ~ gb1+gb2", sample_ij = sample_ij)
+  
+}
+```
+
+Iterate: 
+
+```{r message=FALSE}
+set.seed(global_seed)
+
+cat_2b2b_unique_populations <- cat_2b2b_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2b2b_n_pop <- nrow(cat_2b2b_unique_populations)
+
+for(i in 1:cat_2b2b_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2b2b_n_pop)
+  
+  pop_row_i <- cat_2b2b_unique_populations[i, ]
+  
+  grid_i <- cat_2b2b_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  n_ratios <- sort(unique(grid_i$n_ratio))
+  
+  pop_i <- generate_cat2b2b(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift_1 = pop_row_i$sigma_shift_1, sigma_shift_2 = pop_row_i$sigma_shift_2, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  pop_i[[paste0("n_ratio_w_", n_ratios[1])]] <- ifelse(pop_i$gb2 == "2" , n_ratios[1], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[2])]] <- ifelse(pop_i$gb2 == "2" , n_ratios[2], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[3])]] <- ifelse(pop_i$gb2 == "2" , n_ratios[3], 1)
+  
+  pop_i_gb1_a <- pop_i |> dplyr::filter(gb1 == "a")
+  pop_i_gb1_b <- pop_i |> dplyr::filter(gb1 == "b")
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i_gb1_a = list(pop_i_gb1_a),
+                                  pop_i_gb1_b = list(pop_i_gb1_b),
+                                  n_bw = n_bw, 
+                                  n_ratio = n_ratio
+                                ), 
+                                .f = cat_2b2b_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+
+
+
+### CAT-2B-2B-INT
+
+```{r message=FALSE}
+cat_2b2b_int <- readr::read_csv("../data/simulation_grids/CAT-2B-2B-INT.csv")
+
+cat_2b2b_int_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2B-2B-INT", 
+    combo_id = cat_2b2b_int$combo_id,
+    b, n_bw, 
+    n_ratio = n_ratio_bw, 
+    iter = 1:n_iter
+  ), 
+  cat_2b2b_int |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+generate_cat2b2b_int <- function(
+    n = 100000, 
+    b, 
+    b_shift_1 = 0, 
+    b_shift_2 = 0, 
+    sigma = 1, 
+    sigma_shift_1, 
+    sigma_shift_2,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    between = list(
+      gb1 = c("a", "b"), 
+      gb2 = c("1", "2")
+    ),
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      y = dplyr::case_when(
+        gb1 == "a" & gb2 == "1" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma),
+        gb1 == "a" & gb2 == "2" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma + sigma_shift_1) + b + b_shift_1,
+        gb1 == "b" & gb2 == "1" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        gb1 == "b" & gb2 == "2" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma + sigma_shift_2) + 3*b + b_shift_2,
+      )
+    )
+  
+  return(transformed_df)
+}
+
+
+## sample fit and save
+cat_2b2b_int_sfs <- function(pop_i_gb1_a, pop_i_gb1_b, n_bw, n_ratio){
+  
+  ns <- sample_n_from_ratio_bw2(n_bw = n_bw, n_ratio = n_ratio)
+  
+  weight_col <- paste0("n_ratio_w_", n_ratio)
+  
+  sample_ij <- dplyr::bind_rows(
+    pop_i_gb1_a |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+    pop_i_gb1_b |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))) 
+  )
+  
+  n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+  
+  # must sample at least 2 for each cell and all groups must be represented
+  # in the cell grid 
+  while (any(n_cell_count < 2) | length(n_cell_count) < 4) {
+    
+    sample_ij <- dplyr::bind_rows(
+      pop_i_gb1_a |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+      pop_i_gb1_b |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))) 
+    )
+    
+    n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+    
+  }
+  
+  ## fit ols model 
+  
+  sample_ij <- sample_ij |> dplyr::select(!dplyr::contains("n_ratio")) 
+  
+  # Fit models and export: 
+  fit_and_summarise_mods_bw(mod_formula = "y ~ gb1*gb2", sample_ij = sample_ij)
+  
+}
+```
+
+Iterate: 
+
+```{r message=FALSE}
+set.seed(global_seed)
+
+cat_2b2b_int_unique_populations <- cat_2b2b_int_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2b2b_int_n_pop <- nrow(cat_2b2b_int_unique_populations)
+
+
+for(i in 1:cat_2b2b_int_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2b2b_int_n_pop)
+  
+  pop_row_i <- cat_2b2b_int_unique_populations[i, ]
+  
+  grid_i <- cat_2b2b_int_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  n_ratios <- sort(unique(grid_i$n_ratio))
+  
+  pop_i <- generate_cat2b2b_int(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift_1 = pop_row_i$sigma_shift_1, sigma_shift_2 = pop_row_i$sigma_shift_2, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  pop_i[[paste0("n_ratio_w_", n_ratios[1])]] <- ifelse(pop_i$gb2 == "2" , n_ratios[1], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[2])]] <- ifelse(pop_i$gb2 == "2" , n_ratios[2], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[3])]] <- ifelse(pop_i$gb2 == "2" , n_ratios[3], 1)
+  
+  pop_i_gb1_a <- pop_i |> dplyr::filter(gb1 == "a")
+  pop_i_gb1_b <- pop_i |> dplyr::filter(gb1 == "b")
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i_gb1_a = list(pop_i_gb1_a),
+                                  pop_i_gb1_b = list(pop_i_gb1_b),
+                                  n_bw = n_bw, 
+                                  n_ratio = n_ratio
+                                ), 
+                                .f = cat_2b2b_int_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+
+### CAT-2B-3B
+
+```{r message=FALSE}
+cat_2b3b <- readr::read_csv("../data/simulation_grids/CAT-2B-3B.csv")
+
+cat_2b3b_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2B-3B", 
+    combo_id = cat_2b3b$combo_id,
+    b, n_bw, 
+    n_ratio = n_ratio_bw, 
+    iter = 1:n_iter
+  ), 
+  cat_2b3b |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+generate_cat2b3b <- function(
+    n = 100000, 
+    b, 
+    b_shift_1 = 0, 
+    b_shift_2 = 0, 
+    sigma = 1, 
+    sigma_shift_1, 
+    sigma_shift_2,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    between = list(
+      gb1 = c("1", "2"),
+      gb2 = c("a", "b", "c")
+    ),
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      y = dplyr::case_when(
+        gb1 == "1" & gb2 == "a" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma),
+        gb1 == "1" & gb2 == "b" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        gb1 == "1" & gb2 == "c" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma + sigma_shift_1) + b + b_shift_1,
+        gb1 == "2" & gb2 == "a" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        gb1 == "2" & gb2 == "b" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + 2*b,
+        gb1 == "2" & gb2 == "c" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma + sigma_shift_2) + 2*b + b_shift_2,
+      )
+    )
+  
+  return(transformed_df)
+}
+
+## sample fit and save
+cat_2b3b_sfs <- function(pop_i_gb1_1, pop_i_gb1_2, n_bw, n_ratio){
+  
+  ns <- sample_n_from_ratio_bw2(n_bw = n_bw, n_ratio = n_ratio)
+  
+  weight_col <- paste0("n_ratio_w_", n_ratio)
+  
+  sample_ij <- dplyr::bind_rows(
+    pop_i_gb1_1 |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+    pop_i_gb1_2 |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))) 
+  )
+  
+  n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+  
+  # must sample at least 2 for each cell and all groups must be represented
+  # in the cell grid 
+  while (any(n_cell_count < 2) | length(n_cell_count) < 6) {
+    
+    sample_ij <- dplyr::bind_rows(
+      pop_i_gb1_1 |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+      pop_i_gb1_2 |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))) 
+    )
+    
+    n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+    
+  }
+  
+  sample_ij <- sample_ij |> dplyr::select(!dplyr::contains("n_ratio")) 
+  
+  # Fit models and export: 
+  fit_and_summarise_mods_bw(mod_formula = "y ~ gb1+gb2", sample_ij = sample_ij)
+  
+}
+```
+
+Iterate: 
+
+```{r message=FALSE}
+set.seed(global_seed)
+
+cat_2b3b_unique_populations <- cat_2b3b_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2b3b_n_pop <- nrow(cat_2b3b_unique_populations)
+
+
+for(i in 1:cat_2b3b_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2b3b_n_pop)
+  
+  pop_row_i <- cat_2b3b_unique_populations[i, ]
+  
+  grid_i <- cat_2b3b_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  n_ratios <- sort(unique(grid_i$n_ratio))
+  
+  pop_i <- generate_cat2b3b(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift_1 = pop_row_i$sigma_shift_1, sigma_shift_2 = pop_row_i$sigma_shift_2, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  pop_i[[paste0("n_ratio_w_", n_ratios[1])]] <- ifelse(pop_i$gb2 == "c" , n_ratios[1], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[2])]] <- ifelse(pop_i$gb2 == "c" , n_ratios[2], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[3])]] <- ifelse(pop_i$gb2 == "c" , n_ratios[3], 1)
+  
+  pop_i_gb1_1 <- pop_i |> dplyr::filter(gb1 == "1")
+  pop_i_gb1_2 <- pop_i |> dplyr::filter(gb1 == "2")
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i_gb1_1 = list(pop_i_gb1_1),
+                                  pop_i_gb1_2 = list(pop_i_gb1_2),
+                                  n_bw = n_bw, 
+                                  n_ratio = n_ratio
+                                ), 
+                                .f = cat_2b3b_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+
+```
+
+
+
+### CAT-2B-3B-INT
+
+```{r message=FALSE}
+cat_2b3b_int <- readr::read_csv("../data/simulation_grids/CAT-2B-3B-INT.csv")
+
+cat_2b3b_int_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-2B-3B-INT", 
+    combo_id = cat_2b3b_int$combo_id,
+    b, n_bw, 
+    n_ratio = n_ratio_bw, 
+    iter = 1:n_iter
+  ), 
+  cat_2b3b_int |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+
+generate_cat2b3b_int <- function(
+    n = 100000, 
+    b, 
+    b_shift_1 = 0, 
+    b_shift_2 = 0, 
+    sigma = 1, 
+    sigma_shift_1, 
+    sigma_shift_2,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    between = list(
+      gb1 = c("1", "2"),
+      gb2 = c("a", "b", "c")
+    ),
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      y = dplyr::case_when(
+        gb1 == "1" & gb2 == "a" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma),
+        gb1 == "1" & gb2 == "b" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        gb1 == "1" & gb2 == "c" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma + sigma_shift_1) + b + b_shift_1,
+        gb1 == "2" & gb2 == "a" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        gb1 == "2" & gb2 == "b" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + 3*b,
+        gb1 == "2" & gb2 == "c" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma + sigma_shift_2) + 3*b + b_shift_2,
+      )
+    )
+  
+  return(transformed_df)
+}
+
+
+## sample fit and save
+cat_2b3b_int_sfs <- function(pop_i_gb1_1, pop_i_gb1_2, n_bw, n_ratio){
+  
+  ns <- sample_n_from_ratio_bw2(n_bw = n_bw, n_ratio = n_ratio)
+  #ns <- sample_n_from_ratio_bw2(n_bw = 71, n_ratio = 2)
+  
+  weight_col <- paste0("n_ratio_w_", n_ratio)
+  
+  set.seed(global_seed)
+  sample_ij <- dplyr::bind_rows(
+    pop_i_gb1_1 |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+    pop_i_gb1_2 |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))) 
+  )
+  
+  n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+  
+  # must sample at least 2 for each cell and all groups must be represented
+  # in the cell grid 
+  while (any(n_cell_count < 2) | length(n_cell_count) < 6) {
+    
+    sample_ij <- dplyr::bind_rows(
+      pop_i_gb1_1 |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+      pop_i_gb1_2 |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))) 
+    )
+    
+    n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+    
+  }
+  
+  sample_ij <- sample_ij |> dplyr::select(!dplyr::contains("n_ratio")) 
+  
+  # Fit models and export: 
+  fit_and_summarise_mods_bw(mod_formula = "y ~ gb1*gb2", sample_ij = sample_ij)
+  
+}
+```
+
+Iterate: 
+
+```{r message=FALSE}
+set.seed(global_seed)
+
+cat_2b3b_int_unique_populations <- cat_2b3b_int_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_2b3b_int_n_pop <- nrow(cat_2b3b_int_unique_populations)
+
+
+for(i in 1:cat_2b3b_int_n_pop){
+  
+  show_progress(i = i, n_pop = cat_2b3b_int_n_pop)
+  
+  pop_row_i <- cat_2b3b_int_unique_populations[i, ]
+  
+  grid_i <- cat_2b3b_int_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  n_ratios <- sort(unique(grid_i$n_ratio))
+  
+  pop_i <- generate_cat2b3b_int(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift_1 = pop_row_i$sigma_shift_1, sigma_shift_2 = pop_row_i$sigma_shift_2, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  pop_i[[paste0("n_ratio_w_", n_ratios[1])]] <- ifelse(pop_i$gb2 == "c" , n_ratios[1], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[2])]] <- ifelse(pop_i$gb2 == "c" , n_ratios[2], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[3])]] <- ifelse(pop_i$gb2 == "c" , n_ratios[3], 1)
+  
+  pop_i_gb1_1 <- pop_i |> dplyr::filter(gb1 == "1")
+  pop_i_gb1_2 <- pop_i |> dplyr::filter(gb1 == "2")
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i_gb1_1 = list(pop_i_gb1_1),
+                                  pop_i_gb1_2 = list(pop_i_gb1_2),
+                                  n_bw = n_bw, 
+                                  n_ratio = n_ratio
+                                ), 
+                                .f = cat_2b3b_int_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+
+
+### CAT-3B-3B
+
+```{r message=FALSE}
+cat_3b3b <- readr::read_csv("../data/simulation_grids/CAT-3B-3B.csv")
+
+cat_3b3b_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-3B-3B", 
+    combo_id = cat_3b3b$combo_id,
+    b, n_bw, n_ratio = n_ratio_bw, 
+    iter = 1:n_iter
+  ), 
+  cat_3b3b |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+generate_cat3b3b <- function(
+    n = 100000, 
+    b, 
+    b_shift_1 = 0, 
+    b_shift_2 = 0, 
+    sigma = 1, 
+    sigma_shift_1, 
+    sigma_shift_2,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed) 
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    between = list(
+      gb1 = c("1", "2", "3"),
+      gb2 = c("a", "b", "c")
+    ),
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      y = dplyr::case_when(
+        gb1 == "1" & gb2 == "a" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma),
+        gb1 == "1" & gb2 == "b" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        gb1 == "1" & gb2 == "c" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        
+        gb1 == "2" & gb2 == "a" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        gb1 == "2" & gb2 == "b" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + 2*b,
+        gb1 == "2" & gb2 == "c" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma + sigma_shift_1) + 2*b + b_shift_1, 
+        
+        gb1 == "3" & gb2 == "a" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        gb1 == "3" & gb2 == "b" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + 2*b,
+        gb1 == "3" & gb2 == "c" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma + sigma_shift_2) + 2*b + b_shift_2
+      )
+    )
+  
+  return(transformed_df)
+}
+
+
+## sample fit and save
+cat_3b3b_sfs <- function(pop_i_gb1_1, pop_i_gb1_2, pop_i_gb1_3, n_bw, n_ratio){
+  
+  ns <- sample_n_from_ratio_bw3(n_bw = n_bw, n_ratio = n_ratio)
+  
+  weight_col <- paste0("n_ratio_w_", n_ratio)
+  
+  sample_ij <- dplyr::bind_rows(
+    pop_i_gb1_1 |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+    pop_i_gb1_2 |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))),
+    pop_i_gb1_3 |> dplyr::slice_sample(n = ns[["n3"]], weight_by = (!!sym(weight_col)))
+  )
+  
+  n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+  
+  # must sample at least 2 for each cell and all groups must be represented
+  # in the cell grid 
+  while (any(n_cell_count < 2) | length(n_cell_count) < 9) {
+    
+    sample_ij <- dplyr::bind_rows(
+      pop_i_gb1_1 |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+      pop_i_gb1_2 |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))),
+      pop_i_gb1_3 |> dplyr::slice_sample(n = ns[["n3"]], weight_by = (!!sym(weight_col)))
+    )
+    
+    n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+    
+  }
+  
+  sample_ij <- sample_ij |> dplyr::select(!dplyr::contains("n_ratio")) 
+  
+  # Fit models and export: 
+  fit_and_summarise_mods_bw(mod_formula = "y ~ gb1+gb2", sample_ij = sample_ij)
+  
+}
+```
+
+Iterate: 
+
+```{r message=FALSE}
+set.seed(global_seed)
+
+cat_3b3b_unique_populations <- cat_3b3b_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_3b3b_n_pop <- nrow(cat_3b3b_unique_populations)
+
+
+for(i in 1:cat_3b3b_n_pop){
+  
+  show_progress(i = i, n_pop = cat_3b3b_n_pop)
+  
+  pop_row_i <- cat_3b3b_unique_populations[i, ]
+  
+  grid_i <- cat_3b3b_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  n_ratios <- sort(unique(grid_i$n_ratio))
+  
+  pop_i <- generate_cat3b3b(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift_1 = pop_row_i$sigma_shift_1, sigma_shift_2 = pop_row_i$sigma_shift_2, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  pop_i[[paste0("n_ratio_w_", n_ratios[1])]] <- ifelse(pop_i$gb2 == "c" , n_ratios[1], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[2])]] <- ifelse(pop_i$gb2 == "c" , n_ratios[2], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[3])]] <- ifelse(pop_i$gb2 == "c" , n_ratios[3], 1)
+  
+  pop_i_gb1_1 <- pop_i |> dplyr::filter(gb1 == "1")
+  pop_i_gb1_2 <- pop_i |> dplyr::filter(gb1 == "2")
+  pop_i_gb1_3 <- pop_i |> dplyr::filter(gb1 == "3")
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i_gb1_1 = list(pop_i_gb1_1),
+                                  pop_i_gb1_2 = list(pop_i_gb1_2),
+                                  pop_i_gb1_3 = list(pop_i_gb1_3),
+                                  n_bw = n_bw, 
+                                  n_ratio = n_ratio
+                                ), 
+                                .f = cat_3b3b_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+
+```
+
+
+
+### CAT-3B-3B-INT
+
+```{r message=FALSE}
+cat_3b3b_int <- readr::read_csv("../data/simulation_grids/CAT-3B-3B-INT.csv")
+
+cat_3b3b_int_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "CAT-3B-3B-INT", 
+    combo_id = cat_3b3b_int$combo_id,
+    b, n_bw, 
+    n_ratio = n_ratio_bw, 
+    iter = 1:n_iter
+  ), 
+  cat_3b3b_int |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b)
+  )
+
+
+generate_cat3b3b_int <- function(
+    n = 100000, 
+    b, 
+    b_shift_1 = 0, 
+    b_shift_2 = 0, 
+    sigma = 1, 
+    sigma_shift_1, 
+    sigma_shift_2,
+    nu, 
+    tau
+){
+  
+  set.seed(global_seed)
+  norm_df <- faux::sim_design(
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    between = list(
+      gb1 = c("1", "2", "3"),
+      gb2 = c("a", "b", "c")
+    ),
+    plot = FALSE
+  )
+  
+  transformed_df <- norm_df |> 
+    dplyr::mutate(
+      y = dplyr::case_when(
+        gb1 == "1" & gb2 == "a" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma),
+        gb1 == "1" & gb2 == "b" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        gb1 == "1" & gb2 == "c" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        
+        gb1 == "2" & gb2 == "a" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        gb1 == "2" & gb2 == "b" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + 3*b,
+        gb1 == "2" & gb2 == "c" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma + sigma_shift_1) + 3*b + b_shift_1, 
+        
+        gb1 == "3" & gb2 == "a" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + b,
+        gb1 == "3" & gb2 == "b" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma) + 3*b,
+        gb1 == "3" & gb2 == "c" ~ transform_norm(raw_var = y, mu = 0, nu = nu, tau = tau,
+                                                 sigma = sigma + sigma_shift_2) + 3*b + b_shift_2
+      )
+    )
+  
+  return(transformed_df)
+}
+
+
+## sample fit and save
+cat_3b3b_int_sfs <- function(pop_i_gb1_1, pop_i_gb1_2, pop_i_gb1_3, n_bw, n_ratio){
+  
+  ns <- sample_n_from_ratio_bw3(n_bw = n_bw, n_ratio = n_ratio)
+  
+  weight_col <- paste0("n_ratio_w_", n_ratio)
+  
+  sample_ij <- dplyr::bind_rows(
+    pop_i_gb1_1 |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+    pop_i_gb1_2 |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))),
+    pop_i_gb1_3 |> dplyr::slice_sample(n = ns[["n3"]], weight_by = (!!sym(weight_col)))
+  )
+  
+  n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+  
+  # must sample at least 2 for each cell and all groups must be represented
+  # in the cell grid 
+  while (any(n_cell_count < 2) | length(n_cell_count) < 9) {
+    
+    sample_ij <- dplyr::bind_rows(
+      pop_i_gb1_1 |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+      pop_i_gb1_2 |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))),
+      pop_i_gb1_3 |> dplyr::slice_sample(n = ns[["n3"]], weight_by = (!!sym(weight_col)))
+    )
+    
+    n_cell_count <- sample_ij |> dplyr::count(gb1, gb2) |> dplyr::pull(n)
+    
+  }
+  
+  sample_ij <- sample_ij |> dplyr::select(!dplyr::contains("n_ratio")) 
+  
+  # Fit models and export: 
+  fit_and_summarise_mods_bw(mod_formula = "y ~ gb1*gb2", sample_ij = sample_ij)
+  
+}
+```
+
+Iterate: 
+
+```{r message=FALSE}
+set.seed(global_seed)
+
+cat_3b3b_int_unique_populations <- cat_3b3b_int_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+cat_3b3b_int_n_pop <- nrow(cat_3b3b_int_unique_populations)
+
+for(i in 1:cat_3b3b_int_n_pop){
+  
+  show_progress(i = i, n_pop = cat_3b3b_int_n_pop)
+  
+  pop_row_i <- cat_3b3b_int_unique_populations[i, ]
+  
+  grid_i <- cat_3b3b_int_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  n_ratios <- sort(unique(grid_i$n_ratio))
+  
+  pop_i <- generate_cat3b3b_int(
+    n = n_population, b = pop_row_i$b, 
+    sigma_shift_1 = pop_row_i$sigma_shift_1, sigma_shift_2 = pop_row_i$sigma_shift_2, 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  pop_i[[paste0("n_ratio_w_", n_ratios[1])]] <- ifelse(pop_i$gb2 == "c" , n_ratios[1], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[2])]] <- ifelse(pop_i$gb2 == "c" , n_ratios[2], 1)
+  pop_i[[paste0("n_ratio_w_", n_ratios[3])]] <- ifelse(pop_i$gb2 == "c" , n_ratios[3], 1)
+  
+  pop_i_gb1_1 <- pop_i |> dplyr::filter(gb1 == "1")
+  pop_i_gb1_2 <- pop_i |> dplyr::filter(gb1 == "2")
+  pop_i_gb1_3 <- pop_i |> dplyr::filter(gb1 == "3")
+  
+  ## start purrr level: sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i_gb1_1 = list(pop_i_gb1_1),
+                                  pop_i_gb1_2 = list(pop_i_gb1_2),
+                                  pop_i_gb1_3 = list(pop_i_gb1_3),
+                                  n_bw = n_bw, 
+                                  n_ratio = n_ratio
+                                ), 
+                                .f = cat_3b3b_int_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+
+```
+
+
+## Numeric-only 
+
+### N-NUM
+
+```{r}
+n6_num <- read.csv("../data/simulation_grids/6-NUM.csv")
+n3_num <- read.csv("../data/simulation_grids/3-NUM.csv")
+n2_num <- read.csv("../data/simulation_grids/2-NUM.csv")
+n1_num <- read.csv("../data/simulation_grids/1-NUM.csv")
+
+n_num <- rbind(
+  n6_num, n3_num, n2_num, n1_num
+)
+
+n_num_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "N-NUM",
+    combo_id = n_num$combo_id,
+    b, n_bw, n_preds = c(1,2,3,6),
+    iter = 1:n_iter
+  ), 
+  n_num |> dplyr::select(-design), 
+  by = c("combo_id", "n_preds")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b, "_n_preds_", n_preds)
+  ) |> 
+  dplyr::filter(
+    !n_het_pred > n_preds
+    )
+
+
+generate_n_num <- function(
+    n = 100000,
+    b,
+    n_preds,
+    min_bound, 
+    max_bound, 
+    nu, 
+    tau, 
+    vp_val, 
+    frac, 
+    n_het_pred, 
+    mod_fun,
+    vp_fun
+){
+  
+  varnames <- paste0("x", 1:n_preds)
+  
+  set.seed(global_seed) 
+  norm_df <- faux::rnorm_multi(
+    r = 0.212, 
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    varnames = varnames
+  )
+  
+  # generate errors: 
+  set.seed(global_seed) 
+  e <- gamlss.dist::rSHASHo(
+    n = n,
+    mu = 0,
+    nu = nu,
+    tau = tau
+  )
+  
+  if(n_het_pred == 1){
+    
+    x1_mod <- mod_fun(norm_df$x1)
+    x_mult <- (x1_mod)^(1/frac)
+    
+    m_total <- vp_fun(x = x_mult, vp_val)
+    
+  } else if(n_het_pred == 2){
+    
+    x1_mod <- mod_fun(norm_df$x1)
+    x2_mod <- mod_fun(norm_df$x2)
+    x_mult <- (x1_mod*x2_mod)^(1/frac)
+    
+    m_total <- vp_fun(x = x_mult, vp_val)
+    
+  } else if(n_het_pred == 0) {
+    
+    m_total = 1
+    
+  }
+  
+  # modify the error: 
+  e_mod <- (e*m_total)
+  
+  # adjust error to fit in between bounds 
+  e_mod <- squish(e_mod, min_bound, max_bound)
+  
+  # compute y: 
+  norm_df$y <- rowSums(norm_df*b, na.rm = TRUE) + e_mod
+  
+  return(norm_df)
+}
+
+## sample fit and save
+n_num_sfs <- function(pop_i, n_bw){
+  
+  ## create a sample   
+  sample_ij <- dplyr::slice_sample(.data = pop_i, n = n_bw)
+  
+  var_names <- paste0(names(sample_ij))
+  var_names <- var_names[-length(var_names)]
+  ## fit ols model 
+  lm_formula <- paste0("y ~ ", paste0(var_names, collapse = " + "))
+  
+  # Fit models and export: 
+  fit_and_summarise_mods_bw(mod_formula = lm_formula, sample_ij = sample_ij)
+  
+}
+```
+
+Iterate: 
+
+```{r}
+set.seed(global_seed)
+
+n_num_unique_populations <- n_num_combinations |> 
+  dplyr::filter(
+    !duplicated(population_id), 
+    n_preds %in% c(1, 2, 3, 6)
+    )
+
+n_num_n_pop <- nrow(n_num_unique_populations)
+
+for(i in 1:n_num_n_pop){
+  
+  show_progress(i = i, n_pop = n_num_n_pop)
+  
+  pop_row_i <- n_num_unique_populations[i, ]
+  pop_i <- generate_n_num(
+    n = n_population, b = pop_row_i$b, 
+    n_preds = pop_row_i$n_preds, 
+    min_bound = pop_row_i$min_bound, max_bound = pop_row_i$max_bound, 
+    vp_val = pop_row_i$vp_val, frac = pop_row_i$frac, n_het_pred = pop_row_i$n_het_pred, 
+    mod_fun = text_as_fun(pop_row_i$mod_fun), 
+    vp_fun = text_as_fun(pop_row_i$vp_fun), 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  grid_i <- n_num_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  ## sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i = list(pop_i),
+                                  n_bw = n_bw
+                                ), 
+                                .f = n_num_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+Grid accuracy testing: 
+
+```{r warning=FALSE, eval=FALSE}
+n_num_unique_populations <- n_num_combinations |> 
+  dplyr::filter(!duplicated(population_id)) |> 
+  dplyr::filter(b == 0.3) |> 
+  dplyr::filter(n_preds == 1)
+
+n_num_n_pop <- nrow(n_num_unique_populations)
+
+n_num_sim_results_check <- data.frame()
+
+
+quick_run <- function(i, nu = NA, tau = NA, vp_val = NA, sigma_shift = NA){
+  pop_row_i <- n_num_unique_populations |> 
+    dplyr::filter(combo_id == i)
+  
+  if(!is.na(nu)) pop_row_i$nu <- nu
+  if(!is.na(tau)) pop_row_i$tau <- tau
+  if(!is.na(vp_val)) pop_row_i$vp_val <- vp_val
+  if(!is.na(sigma_shift)) pop_row_i$sigma_shift <- sigma_shift
+  
+  pop_i <- generate_n_num(
+    n = n_population, b = pop_row_i$b, 
+    n_preds = pop_row_i$n_preds, 
+    min_bound = pop_row_i$min_bound, max_bound = pop_row_i$max_bound, 
+    vp_val = pop_row_i$vp_val, frac = pop_row_i$frac, n_het_pred = pop_row_i$n_het_pred, 
+    mod_fun = text_as_fun(pop_row_i$mod_fun), 
+    vp_fun = text_as_fun(pop_row_i$vp_fun), 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  lm_mod <- lm(y ~ x1, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2 + x3, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2 + x3 + x4 + x5 + x6, data = pop_i)
+  
+  pop_i <- broom::augment(lm_mod)
+  
+  betas <- coef(lm_mod)[-1] |> t() |> tibble::as_tibble() 
+  
+  #vr <- var(pop_i[which(pop_i$gw == 1), ]$.resid)/var(pop_i[which(pop_i$gw == 0), ]$.resid)
+  skew <- moments::skewness(lm_mod$residuals)
+  kurt <- (moments::kurtosis(lm_mod$residuals)) - 3
+  
+  quantreg_df <- quantreg_interval_pred_z_e(lm_mod$residuals, pop_i$x1)
+  quantreg_mod <- lm(loess_wide ~ x + I(x^2) + I(x^3) + I(x^4), data = quantreg_df)
+  qli_coeffs <- quantreg_mod_coefs(quantreg_mod) |> 
+    dplyr::select(2,3)
+  
+  n_num_sim_results_check_i <- tibble::tibble(
+    combo_id = pop_row_i$combo_id, 
+    #betas, 
+    #vr = vr, 
+    skew = skew, kurt = kurt, 
+    qli_coeffs
+  )
+  
+  n_num_sim_results_check <- rbind(
+    n_num_sim_results_check,
+    n_num_sim_results_check_i
+  )
+  
+  n_num_sim_results_check_i
+}
+
+combo_id = 24
+quick_run(combo_id)
+quick_run(combo_id, nu = NA, tau = 6, vp_val = 0.93)
+
+quick_run_df <- tibble::tibble()
+
+for (i in n_num_unique_populations$combo_id){
+  quick_run_df <- rbind(
+    quick_run_df,
+    quick_run(i = i))
+}
+
+n_num_unique_populations |> 
+  dplyr::left_join(x = _, quick_run_df) |> 
+  dplyr::select(combo_id, 
+                #target_skew, 
+                #skew,
+                # target_kurt,
+                # kurt, 
+                target_het, 
+                quantreg_x, 
+                # `quantreg_I(x^2)`
+  )# |> 
+# dplyr::filter(combo_id %in% c(24:28))
+```
+
+
+
+### 2-NUM-INT
+
+```{r message=FALSE}
+n2_num_int <- read.csv("../data/simulation_grids/2-NUM-INT.csv")
+
+n2_num_int_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "2-NUM-INT", 
+    combo_id = n2_num_int$combo_id,
+    b, n_bw, 
+    n_preds = 2, 
+    iter = 1:n_iter
+  ), 
+  n2_num_int |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b, "_n_preds_", n_preds)
+  ) |> 
+  dplyr::filter(!n_het_pred > n_preds)
+
+generate_n2_num_int <- function(
+    n = 100000,
+    b,
+    n_preds = 2,
+    b_int_shift = 0,
+    b_main_shift_1 = 0, 
+    b_main_shift_2 = 0,
+    min_bound, 
+    max_bound, 
+    nu, 
+    tau, 
+    vp_val, 
+    frac, 
+    n_het_pred, 
+    mod_fun,
+    vp_fun
+){
+  
+  varnames <- paste0("x", 1:n_preds)
+  
+  set.seed(global_seed) 
+  norm_df <- faux::rnorm_multi(
+    r = 0.212, 
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    varnames = varnames
+  )
+  
+  # generate errors: 
+  set.seed(global_seed) 
+  e <- gamlss.dist::rSHASHo(
+    n = n,
+    mu = 0,
+    nu = nu,
+    tau = tau
+  )
+  
+  if(n_het_pred == 1){
+    
+    x1_mod <- mod_fun(norm_df$x1)
+    x_mult <- (x1_mod)^(1/frac)
+    
+    m_total <- vp_fun(x = x_mult, vp_val)
+    
+  } else if(n_het_pred == 2){
+    
+    x1_mod <- mod_fun(norm_df$x1)
+    x2_mod <- mod_fun(norm_df$x2)
+    x_mult <- (x1_mod*x2_mod)^(1/frac)
+    
+    m_total <- vp_fun(x = x_mult, vp_val)
+    
+  } else if(n_het_pred == 0) {
+    
+    m_total = 1
+    
+  }
+  
+  # modify the error: 
+  e_mod <- (e*m_total)
+  
+  # adjust error to fit in between bounds 
+  e_mod <- squish(e_mod, min_bound, max_bound)
+  
+  # compute y: 
+  norm_df$y <- (b + b_main_shift_1)*norm_df$x1 + 
+    (b+b_main_shift_2)*norm_df$x2 + 
+    (b+b_int_shift)*(norm_df$x1*norm_df$x2) +  e_mod
+  
+  return(norm_df)
+}
+
+## sample fit and save
+n2_num_int_sfs <- function(pop_i, n_bw){
+  
+  ## create a sample   
+  sample_ij <- dplyr::slice_sample(.data = pop_i, n = n_bw)
+  
+  var_names <- paste0(names(sample_ij))
+  var_names <- var_names[-length(var_names)]
+  ## fit ols model 
+  lm_formula <- paste0("y ~ ", paste0(var_names, collapse = " * "))
+  
+  # Fit models and export: 
+  fit_and_summarise_mods_bw(mod_formula = lm_formula, sample_ij = sample_ij)
+  
+}
+```
+
+Iterate: 
+
+```{r}
+set.seed(global_seed)
+
+n2_num_int_unique_populations <- n2_num_int_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+n2_num_int_n_pop <- nrow(n2_num_int_unique_populations)
+
+for(i in 1:n2_num_int_n_pop){
+  
+  show_progress(i = i, n_pop = n2_num_int_n_pop)
+  
+  pop_row_i <- n2_num_int_unique_populations[i, ]
+  pop_i <- generate_n2_num_int(
+    n = n_population, b = pop_row_i$b, 
+    n_preds = pop_row_i$n_preds, 
+    min_bound = pop_row_i$min_bound, max_bound = pop_row_i$max_bound, 
+    vp_val = pop_row_i$vp_val, frac = pop_row_i$frac, n_het_pred = pop_row_i$n_het_pred, 
+    mod_fun = text_as_fun(pop_row_i$mod_fun), 
+    vp_fun = text_as_fun(pop_row_i$vp_fun), 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  grid_i <- n2_num_int_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  ## sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i = list(pop_i),
+                                  n_bw = n_bw
+                                ), 
+                                .f = n2_num_int_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+Grid accuracy testing: 
+
+```{r warning=FALSE, eval=FALSE}
+n2_num_int_unique_populations <- n2_num_int_combinations |> 
+  dplyr::filter(!duplicated(population_id)) |> 
+  dplyr::filter(b == 0.3)
+
+n2_num_int_n_pop <- nrow(n2_num_int_unique_populations)
+
+n2_num_int_sim_results_check <- data.frame()
+
+
+quick_run <- function(i, nu = NA, tau = NA, vp_val = NA, sigma_shift = NA){
+  pop_row_i <- n2_num_int_unique_populations |> 
+    dplyr::filter(combo_id == i)
+  
+  if(!is.na(nu)) pop_row_i$nu <- nu
+  if(!is.na(tau)) pop_row_i$tau <- tau
+  if(!is.na(vp_val)) pop_row_i$vp_val <- vp_val
+  if(!is.na(sigma_shift)) pop_row_i$sigma_shift <- sigma_shift
+  
+  pop_i <- generate_n2_num_int(
+    n = n_population, b = pop_row_i$b, 
+    n_preds = pop_row_i$n_preds, 
+    min_bound = pop_row_i$min_bound, max_bound = pop_row_i$max_bound, 
+    vp_val = pop_row_i$vp_val, frac = pop_row_i$frac, n_het_pred = pop_row_i$n_het_pred, 
+    mod_fun = text_as_fun(pop_row_i$mod_fun), 
+    vp_fun = text_as_fun(pop_row_i$vp_fun), 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  lm_mod <- lm(y ~ x1*x2, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2 + x3, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2 + x3 + x4 + x5 + x6, data = pop_i)
+  
+  pop_i <- broom::augment(lm_mod)
+  
+  betas <- coef(lm_mod)[-1] |> t() |> tibble::as_tibble() 
+  
+  #vr <- var(pop_i[which(pop_i$gw == 1), ]$.resid)/var(pop_i[which(pop_i$gw == 0), ]$.resid)
+  skew <- moments::skewness(lm_mod$residuals)
+  kurt <- (moments::kurtosis(lm_mod$residuals)) - 3
+  
+  quantreg_df <- quantreg_interval_pred_z_e(lm_mod$residuals, pop_i$x1)
+  quantreg_mod <- lm(loess_wide ~ x + I(x^2) + I(x^3) + I(x^4), data = quantreg_df)
+  qli_coeffs <- quantreg_mod_coefs(quantreg_mod) |> 
+    dplyr::select(2,3)
+  
+  n2_num_int_sim_results_check_i <- tibble::tibble(
+    combo_id = pop_row_i$combo_id, 
+    #betas, 
+    #vr = vr, 
+    skew = skew, kurt = kurt, 
+    qli_coeffs
+  )
+  
+  n2_num_int_sim_results_check <- rbind(
+    n2_num_int_sim_results_check,
+    n2_num_int_sim_results_check_i
+  )
+  
+  n2_num_int_sim_results_check_i
+}
+
+combo_id = 21
+quick_run(combo_id)
+quick_run(combo_id, nu = 0.20, tau = NA, vp_val = NA)
+
+quick_run_df <- tibble::tibble()
+
+for (i in n2_num_int_unique_populations$combo_id){
+  quick_run_df <- rbind(
+    quick_run_df,
+    quick_run(i = i))
+}
+
+n2_num_int_unique_populations |> 
+  dplyr::left_join(x = _, quick_run_df) |> 
+  dplyr::select(combo_id, 
+                # target_skew, 
+                # skew,
+                target_kurt,
+                kurt, 
+                #target_het, 
+                #quantreg_x, 
+                #`quantreg_I(x^2)`
+  )# |> 
+# dplyr::filter(combo_id %in% c(29:33))
+```
+
+
+
+### 3-NUM-INT
+
+```{r message=FALSE}
+n3_num_int <- read.csv("../data/simulation_grids/3-NUM-INT.csv")
+
+n3_num_int_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "3-NUM-INT", 
+    combo_id = n2_num_int$combo_id,
+    b, n_bw, 
+    n_preds = 3, 
+    iter = 1:n_iter
+  ), 
+  n3_num_int |> dplyr::select(-design),
+  by = c("combo_id")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b, "_n_preds_", n_preds)
+  ) |> 
+  dplyr::filter(!n_het_pred > n_preds)
+
+
+generate_n3_num_int <- function(
+    n = 100000,
+    b,
+    n_preds = 3,
+    b_main_shift_1 = 0,
+    b_main_shift_2 = 0,
+    b_main_shift_3 = 0,
+    b_int_shift_1 = 0,
+    b_int_shift_2 = 0,
+    b_int_shift_3 = 0,
+    min_bound, 
+    max_bound, 
+    nu, 
+    tau, 
+    vp_val, 
+    frac, 
+    n_het_pred, 
+    mod_fun,
+    vp_fun
+){
+  
+  varnames <- paste0("x", 1:n_preds)
+  
+  set.seed(global_seed) 
+  norm_df <- faux::rnorm_multi(
+    r = 0.212, 
+    n = n, 
+    mu = 0, 
+    sd = 1, 
+    varnames = varnames
+  )
+  
+  # generate errors: 
+  set.seed(global_seed) 
+  e <- gamlss.dist::rSHASHo(
+    n = n,
+    mu = 0,
+    nu = nu,
+    tau = tau
+  )
+  
+  if(n_het_pred == 1){
+    
+    x1_mod <- mod_fun(norm_df$x1)
+    x_mult <- (x1_mod)^(1/frac)
+    
+    m_total <- vp_fun(x = x_mult, vp_val)
+    
+  } else if(n_het_pred == 2){
+    
+    x1_mod <- mod_fun(norm_df$x1)
+    x2_mod <- mod_fun(norm_df$x2)
+    x_mult <- (x1_mod*x2_mod)^(1/frac)
+    
+    m_total <- vp_fun(x = x_mult, vp_val)
+    
+  } else if(n_het_pred == 0) {
+    
+    m_total = 1
+    
+  }
+  
+  # modify the error: 
+  e_mod <- (e*m_total)
+  
+  # adjust error to fit in between bounds 
+  e_mod <- squish(e_mod, min_bound, max_bound)
+  
+  # compute y: 
+  norm_df$y <- 
+    (b+b_main_shift_1)*(norm_df$x1) + 
+    (b+b_main_shift_2)*(norm_df$x2) + 
+    (b+b_main_shift_3)*(norm_df$x3) + 
+    (b+b_int_shift_1)*(norm_df$x1*norm_df$x2) +  
+    (b+b_int_shift_2)*(norm_df$x1*norm_df$x3) +  
+    (b+b_int_shift_3)*(norm_df$x2*norm_df$x3) +  
+    e_mod
+  
+  
+  return(norm_df)
+}
+
+
+## sample fit and save
+n3_num_int_sfs <- function(pop_i, n_bw){
+  
+  ## create a sample   
+  sample_ij <- dplyr::slice_sample(.data = pop_i, n = n_bw)
+  
+  var_names <- paste0(names(sample_ij))
+  var_names <- var_names[-length(var_names)]
+  
+  ## fit ols model 
+  
+  lm_formula <- "y ~ x1 + x2 + x3 + x1:x2 + x1:x3 + x2:x3"
+  
+  # Fit models and export: 
+  fit_and_summarise_mods_bw(mod_formula = lm_formula, sample_ij = sample_ij)
+  
+}
+```
+
+Iterate: 
+
+```{r}
+set.seed(global_seed)
+
+n3_num_int_unique_populations <- n3_num_int_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+n3_num_int_n_pop <- nrow(n3_num_int_unique_populations)
+
+
+for(i in 1:n3_num_int_n_pop){
+  
+  show_progress(i = i, n_pop = n3_num_int_n_pop)
+  
+  pop_row_i <- n3_num_int_unique_populations[i, ]
+  pop_i <- generate_n3_num_int(
+    n = n_population, b = pop_row_i$b, 
+    n_preds = pop_row_i$n_preds, 
+    min_bound = pop_row_i$min_bound, max_bound = pop_row_i$max_bound, 
+    vp_val = pop_row_i$vp_val, frac = pop_row_i$frac, n_het_pred = pop_row_i$n_het_pred, 
+    mod_fun = text_as_fun(pop_row_i$mod_fun), 
+    vp_fun = text_as_fun(pop_row_i$vp_fun), 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  grid_i <- n3_num_int_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  ## sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i = list(pop_i),
+                                  n_bw = n_bw
+                                ), 
+                                .f = n3_num_int_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+
+Check grid accuracy:
+
+```{r warning=FALSE, eval=FALSE}
+n3_num_int_unique_populations <- n3_num_int_combinations |> 
+  dplyr::filter(!duplicated(population_id)) |> 
+  dplyr::filter(b == 0.3)
+
+n3_num_int_n_pop <- nrow(n3_num_int_unique_populations)
+
+n3_num_int_sim_results_check <- data.frame()
+
+
+quick_run <- function(i, nu = NA, tau = NA, vp_val = NA, sigma_shift = NA){
+  pop_row_i <- n3_num_int_unique_populations |> 
+    dplyr::filter(combo_id == i)
+  
+  if(!is.na(nu)) pop_row_i$nu <- nu
+  if(!is.na(tau)) pop_row_i$tau <- tau
+  if(!is.na(vp_val)) pop_row_i$vp_val <- vp_val
+  if(!is.na(sigma_shift)) pop_row_i$sigma_shift <- sigma_shift
+  
+  pop_i <- generate_n3_num_int(
+    n = n_population, b = pop_row_i$b, 
+    n_preds = pop_row_i$n_preds, 
+    min_bound = pop_row_i$min_bound, max_bound = pop_row_i$max_bound, 
+    vp_val = pop_row_i$vp_val, frac = pop_row_i$frac, n_het_pred = pop_row_i$n_het_pred, 
+    mod_fun = text_as_fun(pop_row_i$mod_fun), 
+    vp_fun = text_as_fun(pop_row_i$vp_fun), 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  lm_mod <- lm(y ~ x1*x2 + x1*x3 + x2*x3, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2 + x3, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2 + x3 + x4 + x5 + x6, data = pop_i)
+  
+  pop_i <- broom::augment(lm_mod)
+  
+  betas <- coef(lm_mod)[-1] |> t() |> tibble::as_tibble() 
+  
+  #vr <- var(pop_i[which(pop_i$gw == 1), ]$.resid)/var(pop_i[which(pop_i$gw == 0), ]$.resid)
+  skew <- moments::skewness(lm_mod$residuals)
+  kurt <- (moments::kurtosis(lm_mod$residuals)) - 3
+  
+  quantreg_df <- quantreg_interval_pred_z_e(lm_mod$residuals, pop_i$x1)
+  quantreg_mod <- lm(loess_wide ~ x + I(x^2) + I(x^3) + I(x^4), data = quantreg_df)
+  qli_coeffs <- quantreg_mod_coefs(quantreg_mod) |> 
+    dplyr::select(2,3)
+  
+  n3_num_int_sim_results_check_i <- tibble::tibble(
+    combo_id = pop_row_i$combo_id, 
+    #betas, 
+    #vr = vr, 
+    skew = skew, kurt = kurt, 
+    qli_coeffs
+  )
+  
+  n3_num_int_sim_results_check <- rbind(
+    n3_num_int_sim_results_check,
+    n3_num_int_sim_results_check_i
+  )
+  
+  n3_num_int_sim_results_check_i
+}
+
+combo_id = 11
+quick_run(combo_id)
+quick_run(combo_id, nu = NA, tau = 1.05, vp_val = 1)
+
+quick_run_df <- tibble::tibble()
+
+for (i in n3_num_int_unique_populations$combo_id){
+  quick_run_df <- rbind(
+    quick_run_df,
+    quick_run(i = i))
+}
+
+n3_num_int_unique_populations |> 
+  dplyr::left_join(x = _, quick_run_df) |> 
+  dplyr::select(combo_id, 
+                #target_skew, 
+                # skew,
+                # target_kurt,
+                #kurt, 
+                target_het, 
+                quantreg_x, 
+                # `quantreg_I(x^2)`
+  )# |> 
+#dplyr::filter(combo_id %in% c(29:33))
+```
+
+
+## Mixed predictor models 
+
+### N-NUM-CAT
+
+```{r message=FALSE}
+n_1num_1cat <- read.csv("../data/simulation_grids/N-1NUM-1CAT.csv")
+n_1num_2cat <- read.csv("../data/simulation_grids/N-1NUM-2CAT.csv")
+
+n_3num_1cat <- read.csv("../data/simulation_grids/N-3NUM-1CAT.csv")
+n_3num_2cat <- read.csv("../data/simulation_grids/N-3NUM-2CAT.csv")
+
+n_8num_1cat <- read.csv("../data/simulation_grids/N-8NUM-1CAT.csv")
+n_8num_2cat <- read.csv("../data/simulation_grids/N-8NUM-2CAT.csv")
+
+n_num_cat <- rbind(
+  n_1num_1cat,
+  n_1num_2cat,
+  
+  n_3num_1cat, 
+  n_3num_2cat, 
+  
+  n_8num_1cat, 
+  n_8num_2cat
+)
+
+n_num_cat_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "N-NUM-CAT", 
+    combo_id = n_num_cat$combo_id,
+    b, n_bw, n_ratio = n_ratio_bw,
+    iter = 1:n_iter, 
+    n_cat_preds = c(1,2), 
+    n_cont_preds = c(1,3,8)
+  ), 
+  n_num_cat |> dplyr::select(-design),
+  by = c("combo_id", "n_cat_preds", "n_cont_preds")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b, 
+                           "_n_cont_preds_", n_cont_preds, "_n_cat_preds_", n_cat_preds)
+  )
+
+
+generate_n_num_cat <- function(
+    n = 100000,
+    b,
+    n_cont_preds,
+    n_cat_preds,
+    min_bound, 
+    max_bound, 
+    nu, 
+    tau, 
+    vp_val, 
+    sigma_shift, 
+    n_het_preds, 
+    mod_fun,
+    vp_fun, 
+    sigma = 1
+    
+){
+  
+  #sigma = 1
+  r = 0.212
+  r_cat_shift = 0.042
+  
+  cat_pred_names = paste0("x", 1:n_cat_preds, "_cat")
+  
+  # generate correlated predictors 
+  set.seed(global_seed) 
+  norm_df <- faux::rnorm_multi(n = n, r = r, varnames = paste0("x", 1:n_cont_preds))  
+  
+  set.seed(global_seed) 
+  norm_df[[cat_pred_names[1]]] <- faux::rnorm_pre(norm_df,  r = r + r_cat_shift)
+  
+  if(n_cat_preds == 2){
+    norm_df[[cat_pred_names[2]]] <- faux::rnorm_pre(norm_df, r = r + r_cat_shift)
+    norm_df <- norm_df |> dplyr::arrange(by = !!sym(cat_pred_names[2]))
+    norm_df[[cat_pred_names[2]]] <- rep(c(0, 1), each = n/2)
+  }
+  
+  norm_df <- norm_df |> dplyr::arrange(by = !!sym(cat_pred_names[1]))
+  norm_df[[cat_pred_names[1]]] <- rep(c(0, 1), each = n/2)
+  
+  # generate errors 
+  set.seed(21023) 
+  e <- gamlss.dist::rSHASHo(
+    n = n,
+    mu = 0,
+    nu = nu,
+    tau = tau
+  )
+  
+  # modify error 
+  if(n_het_preds == 1){
+    
+    x1_mod <- mod_fun(norm_df$x1)
+    x_mult <- (x1_mod)^(1/1)
+    m_cont <- vp_fun(x = x_mult, vp_val)
+    
+    x1_cat_sd = ifelse(norm_df$x1_cat == 1, sigma + sigma_shift, sigma)
+    m_cat <- x1_cat_sd
+    
+    m_total <- m_cat*m_cont
+    
+  } else if(n_het_preds == 2){
+    
+    x1_mod <- mod_fun(norm_df$x1)
+    x_mult <- (x1_mod)^(1/1)
+    m_cont <- vp_fun(x = x_mult, vp_val)
+    
+    x1_cat_sd = ifelse(norm_df$x1_cat == 1, sigma + sigma_shift, sigma)
+    m_cat <- x1_cat_sd
+    
+    m_total <- m_cat*m_cont
+    
+  } else if(n_het_preds == 0){
+    m_total = 1
+  }
+  
+  #m_total = 1
+  e_mod = e*m_total
+  e_mod <- squish(e_mod, min_bound, max_bound)
+  
+  # generate y 
+  norm_df$y <- rowSums(norm_df[, 1:(n_cont_preds+n_cat_preds)]*b) + e_mod
+  
+  return(norm_df)
+}
+
+
+## sample fit and save
+n_num_cat_sfs <- function(pop_i_x1_cat_0, pop_i_x1_cat_1, n_cat_preds, n_bw, n_ratio){
+  
+  ## create a sample   
+  ns <- sample_n_from_ratio_bw2(n_bw = n_bw, n_ratio = n_ratio)
+  
+  if(n_cat_preds == 1){
+    
+    sample_ij <- dplyr::bind_rows(
+      pop_i_x1_cat_0 |> dplyr::slice_sample(n = ns[["n1"]]), 
+      pop_i_x1_cat_1 |> dplyr::slice_sample(n = ns[["n2"]]) 
+    )
+    
+  } else if(n_cat_preds == 2){
+    
+    weight_col <- paste0("n_ratio_w_", n_ratio)
+    
+    sample_ij <- dplyr::bind_rows(
+      pop_i_x1_cat_0 |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+      pop_i_x1_cat_1 |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))) 
+    )
+    
+    n_cell_count <- sample_ij |> dplyr::count(x1_cat, x2_cat) |> dplyr::pull(n)
+    
+    # must sample at least 2 for each cell and all groups must be represented
+    # in the cell grid 
+    while (any(n_cell_count < 2) | length(n_cell_count) < 4) {
+      
+      sample_ij <- dplyr::bind_rows(
+        pop_i_x1_cat_0 |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+        pop_i_x1_cat_1 |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))) 
+      )
+      
+      n_cell_count <- sample_ij |> dplyr::count(x1_cat, x2_cat) |> dplyr::pull(n)
+      
+    }
+    
+  }
+  
+  sample_ij <- sample_ij |> 
+    dplyr::select(-dplyr::contains("ratio"))
+  
+  ## fit ols model 
+  lm_formula = paste0(
+    "y ~ ", 
+    paste0(names(sample_ij[, -ncol(sample_ij)]), collapse = " + ")
+  )
+  
+  # Fit models and export: 
+  fit_and_summarise_mods_bw(mod_formula = lm_formula, sample_ij = sample_ij)
+  
+}
+```
+
+Iterate: 
+
+```{r}
+set.seed(global_seed)
+
+n_num_cat_unique_populations <- n_num_cat_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+n_num_cat_n_pop <- nrow(n_num_cat_unique_populations)
+
+
+for(i in 1:n_num_cat_n_pop){
+  
+  pop_row_i <- n_num_cat_unique_populations[i, ]
+  
+  grid_i <- n_num_cat_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  n_ratios <- sort(unique(grid_i$n_ratio))
+  
+  pop_i <- generate_n_num_cat(
+    sigma_shift = pop_row_i$sigma_shift,
+    n_cat_preds = pop_row_i$n_cat_preds, 
+    n_cont_preds = pop_row_i$n_cont_preds,
+    n = n_population, b = pop_row_i$b, 
+    min_bound = pop_row_i$min_bound, max_bound = pop_row_i$max_bound, 
+    vp_val = pop_row_i$vp_val, n_het_preds = pop_row_i$n_het_pred, 
+    mod_fun = text_as_fun(pop_row_i$mod_fun), 
+    vp_fun = text_as_fun(pop_row_i$vp_fun), 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  if(pop_row_i$n_cat_preds == 2){
+    
+    pop_i[[paste0("n_ratio_w_", n_ratios[1])]] <- ifelse(pop_i$x2_cat == "1" , n_ratios[1], 1)
+    pop_i[[paste0("n_ratio_w_", n_ratios[2])]] <- ifelse(pop_i$x2_cat == "1" , n_ratios[2], 1)
+    pop_i[[paste0("n_ratio_w_", n_ratios[3])]] <- ifelse(pop_i$x2_cat == "1" , n_ratios[3], 1)
+    
+  }
+  
+  pop_i_x1_cat_0 <- pop_i |> dplyr::filter(x1_cat == 0)
+  pop_i_x1_cat_1 <- pop_i |> dplyr::filter(x1_cat == 1)
+  
+  grid_i <- n_num_cat_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  ## sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i_x1_cat_0 = list(pop_i_x1_cat_0),
+                                  pop_i_x1_cat_1 = list(pop_i_x1_cat_1),
+                                  n_cat_preds = n_cat_preds,
+                                  n_ratio = n_ratio, 
+                                  n_bw = n_bw
+                                ), 
+                                .f = n_num_cat_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+Check grid accuracy:
+
+```{r warning=FALSE, eval=FALSE}
+n_num_cat_unique_populations <- n_num_cat_combinations |> 
+  dplyr::filter(!duplicated(population_id)) |> 
+  dplyr::filter(b == 0.3, n_cont_preds == 8, n_cat_preds == 2)
+
+n_num_cat_n_pop <- nrow(n_num_cat_unique_populations)
+
+
+
+quick_run <- function(i, nu = NA, tau = NA, vp_val = NA, sigma_shift = NA){
+  pop_row_i <- n_num_cat_unique_populations |> 
+    dplyr::filter(combo_id == i)
+  
+  if(!is.na(nu)) pop_row_i$nu <- nu
+  if(!is.na(tau)) pop_row_i$tau <- tau
+  if(!is.na(vp_val)) pop_row_i$vp_val <- vp_val
+  if(!is.na(sigma_shift)) pop_row_i$sigma_shift <- sigma_shift
+  
+  pop_i <- generate_n_num_cat(
+    sigma_shift = pop_row_i$sigma_shift,
+    n_cat_preds = pop_row_i$n_cat_preds, 
+    n_cont_preds = pop_row_i$n_cont_preds,
+    n = n_population, b = pop_row_i$b, 
+    min_bound = pop_row_i$min_bound, max_bound = pop_row_i$max_bound, 
+    vp_val = pop_row_i$vp_val, n_het_preds = pop_row_i$n_het_pred, 
+    mod_fun = text_as_fun(pop_row_i$mod_fun), 
+    vp_fun = text_as_fun(pop_row_i$vp_fun), 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  #lm_mod <- lm(y ~ x1+x1_cat+x2_cat, data = pop_i)
+  lm_mod <- lm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x1_cat + x2_cat, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2 + x3, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2 + x3 + x4 + x5 + x6, data = pop_i)
+  
+  pop_i <- broom::augment(lm_mod)
+  
+  betas <- coef(lm_mod)[-1] |> t() |> tibble::as_tibble() 
+  
+  vr <- var(pop_i[which(pop_i$x1_cat == 1), ]$.resid)/var(pop_i[which(pop_i$x1_cat == 0), ]$.resid)
+  skew <- moments::skewness(lm_mod$residuals)
+  kurt <- (moments::kurtosis(lm_mod$residuals)) - 3
+  
+  quantreg_df <- quantreg_interval_pred_z_e(lm_mod$residuals, pop_i$x1)
+  quantreg_mod <- lm(loess_wide ~ x + I(x^2) + I(x^3) + I(x^4), data = quantreg_df)
+  qli_coeffs <- quantreg_mod_coefs(quantreg_mod) |> 
+    dplyr::select(2,3)
+  
+  n_num_cat_sim_results_check_i <- tibble::tibble(
+    combo_id = pop_row_i$combo_id, 
+    #betas, 
+    
+    skew = skew, kurt = kurt, 
+    qli_coeffs, 
+    vr = vr
+  )
+  
+  n_num_cat_sim_results_check <- rbind(
+    n_num_cat_sim_results_check,
+    n_num_cat_sim_results_check_i
+  )
+  
+  n_num_cat_sim_results_check_i
+}
+
+combo_id = 33
+quick_run(combo_id)
+
+quick_run(combo_id, nu = NA, tau = NA, vp_val = NA, sigma_shift = NA)
+quick_run(combo_id, nu = NA, tau = NA, vp_val = NA, sigma_shift = NA)
+quick_run(combo_id, nu = NA, tau = NA, vp_val = NA, sigma_shift = NA)
+
+quick_run_df <- tibble::tibble()
+
+for (i in n_num_cat_unique_populations$combo_id){
+  quick_run_df <- rbind(
+    quick_run_df,
+    quick_run(i = i))
+}
+
+n_num_cat_unique_populations |> 
+  dplyr::left_join(x = _, quick_run_df) |> 
+  dplyr::select(combo_id, 
+                # target_skew, 
+                # skew,
+                # target_kurt,
+                # kurt, 
+                # target_het, 
+                # `quantreg_I(x^2)`,
+                # quantreg_x, 
+                # target_vr,
+                # vr
+  ) |> 
+  round(4)
+```
+
+
+
+### N-NUM-CAT-INT
+
+```{r message=FALSE}
+n_1num_1cat_int <- read.csv("../data/simulation_grids/N-1NUM-1CAT-INT.csv")
+n_1num_2cat_int <- read.csv("../data/simulation_grids/N-1NUM-2CAT-INT.csv")
+
+n_3num_1cat_int <- read.csv("../data/simulation_grids/N-3NUM-1CAT-INT.csv")
+n_3num_2cat_int <- read.csv("../data/simulation_grids/N-3NUM-2CAT-INT.csv")
+
+n_8num_1cat_int <- read.csv("../data/simulation_grids/N-8NUM-1CAT-INT.csv")
+n_8num_2cat_int <- read.csv("../data/simulation_grids/N-8NUM-2CAT-INT.csv")
+
+n_num_cat_int <- rbind(
+  n_1num_1cat_int |> dplyr::mutate(n_int = 1), 
+  n_1num_2cat_int |> dplyr::mutate(n_int = 2), 
+  n_3num_1cat_int |> dplyr::mutate(n_int = 1), 
+  n_3num_2cat_int |> dplyr::mutate(n_int = 2), 
+  n_8num_1cat_int |> dplyr::mutate(n_int = 1), 
+  n_8num_2cat_int |> dplyr::mutate(n_int = 2)
+)
+
+n_num_cat_int_combinations <- dplyr::full_join(
+  tidyr::expand_grid(
+    design = "N-NUM-CAT-INT", 
+    combo_id = n_num_cat_int$combo_id,
+    b, n_bw, n_ratio = n_ratio_bw, 
+    #n_int = c(1,2),
+    n_cont_preds = c(1,3,8), 
+    n_cat_preds = c(1,2),
+    iter = 1:n_iter
+  ), 
+  n_num_cat_int |> dplyr::select(-design),
+  by = c("combo_id", "n_cat_preds", "n_cont_preds")
+) |> 
+  dplyr::mutate(
+    population_id = paste0(design, "_", combo_id, "_b_", b, 
+                           "_n_cont_preds_", n_cont_preds, "_n_cat_preds_", n_cat_preds, 
+                           "_n_int_", n_int)
+  )
+
+
+generate_n_num_cat_int <- function(
+    n = 100000,
+    b,
+    n_cont_preds,
+    n_cat_preds,
+    n_int,
+    min_bound, 
+    max_bound, 
+    nu, 
+    tau, 
+    vp_val, 
+    sigma_shift, 
+    n_het_preds, 
+    mod_fun,
+    vp_fun
+    
+){
+  
+  sigma = 1
+  r = 0.212
+  r_cat_shift = 0.042
+  
+  cat_pred_names = paste0("x", 1:n_cat_preds, "_cat")
+  
+  # generate correlated predictors 
+  set.seed(global_seed) 
+  norm_df <- faux::rnorm_multi(n = n, r = r, varnames = paste0("x", 1:n_cont_preds))  
+  
+  set.seed(global_seed)
+  norm_df[[cat_pred_names[1]]] <- faux::rnorm_pre(norm_df,  r = r + r_cat_shift)
+  
+  if(n_cat_preds == 2){
+    norm_df[[cat_pred_names[2]]] <- faux::rnorm_pre(norm_df, r = r + r_cat_shift)
+    norm_df <- norm_df |> dplyr::arrange(by = !!sym(cat_pred_names[2]))
+    norm_df[[cat_pred_names[2]]] <- rep(c(0, 1), each = n/2)
+  }
+  
+  norm_df <- norm_df |> dplyr::arrange(by = !!sym(cat_pred_names[1]))
+  norm_df[[cat_pred_names[1]]] <- rep(c(0, 1), each = n/2)
+  
+  # generate errors 
+  set.seed(21023) 
+  e <- gamlss.dist::rSHASHo(
+    n = n,
+    mu = 0,
+    nu = nu,
+    tau = tau
+  )
+  
+  # modify error 
+  if(n_het_preds == 1){
+    
+    x1_mod <- mod_fun(norm_df$x1)
+    x_mult <- (x1_mod)^(1/1)
+    m_cont <- vp_fun(x = x_mult, vp_val)
+    
+    x1_cat_sd = ifelse(norm_df$x1_cat == 1, sigma + sigma_shift, sigma)
+    m_cat <- x1_cat_sd
+    
+    m_total <- m_cat*m_cont
+    
+  } else if(n_het_preds == 2){
+    
+    x1_mod <- mod_fun(norm_df$x1)
+    x_mult <- (x1_mod)^(1/1)
+    m_cont <- vp_fun(x = x_mult, vp_val)
+    
+    x1_cat_sd = ifelse(norm_df$x1_cat == 1, sigma + sigma_shift, sigma)
+    m_cat <- x1_cat_sd
+    
+    m_total <- m_cat*m_cont
+    
+  } else if(n_het_preds == 0){
+    m_total = 1
+  }
+  
+  #m_total = 1
+  e_mod = e*m_total
+  e_mod <- squish(e_mod, min_bound, max_bound)
+  
+  # generate y 
+  if(n_int == 1){
+    
+    norm_df$y <- 
+      rowSums(norm_df[, 1:(n_cont_preds+n_cat_preds)]*b) + 
+      b*(norm_df$x1*norm_df$x1_cat) + e_mod
+    
+  } else if(n_int == 2){
+    
+    norm_df$y <- 
+      rowSums(norm_df[, 1:(n_cont_preds+n_cat_preds)]*b) + 
+      b*(norm_df$x1*norm_df$x1_cat) + 
+      b*(norm_df$x1*norm_df$x2_cat) + e_mod
+    
+  }
+  
+  return(norm_df)
+}
+
+
+## sample fit and save
+n_num_cat_int_sfs <- function(pop_i_x1_cat_0, pop_i_x1_cat_1, n_cat_preds, n_int, n_bw, n_ratio){
+  
+  ## create a sample   
+  ns <- sample_n_from_ratio_bw2(n_bw = n_bw, n_ratio = n_ratio)
+  
+  if(n_cat_preds == 1){
+    
+    sample_ij <- dplyr::bind_rows(
+      pop_i_x1_cat_0 |> dplyr::slice_sample(n = ns[["n1"]]), 
+      pop_i_x1_cat_1 |> dplyr::slice_sample(n = ns[["n2"]]) 
+    )
+    
+  } else if(n_cat_preds == 2){
+    
+    weight_col <- paste0("n_ratio_w_", n_ratio)
+    
+    sample_ij <- dplyr::bind_rows(
+      pop_i_x1_cat_0 |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+      pop_i_x1_cat_1 |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))) 
+    )
+    
+    n_cell_count <- sample_ij |> dplyr::count(x1_cat, x2_cat) |> dplyr::pull(n)
+    
+    # must sample at least 2 for each cell and all groups must be represented
+    # in the cell grid 
+    while (any(n_cell_count < 2) | length(n_cell_count) < 4) {
+      
+      sample_ij <- dplyr::bind_rows(
+        pop_i_x1_cat_0 |> dplyr::slice_sample(n = ns[["n1"]], weight_by = (!!sym(weight_col))), 
+        pop_i_x1_cat_1 |> dplyr::slice_sample(n = ns[["n2"]], weight_by = (!!sym(weight_col))) 
+      )
+      
+      n_cell_count <- sample_ij |> dplyr::count(x1_cat, x2_cat) |> dplyr::pull(n)
+      
+    }
+    
+  }
+  
+  sample_ij <- sample_ij |> 
+    dplyr::select(-dplyr::contains("ratio"))
+  
+  
+  if(n_int == 1){
+    
+    lm_formula = paste0(
+      "y ~ ", 
+      paste0(names(sample_ij[, -ncol(sample_ij)]), collapse = " + "), 
+      " + x1:x1_cat"
+    )
+    
+  } else if(n_int == 2){
+    
+    lm_formula = paste0(
+      "y ~ ", 
+      paste0(names(sample_ij[, -ncol(sample_ij)]), collapse = " + "), 
+      " + x1:x1_cat + x1:x2_cat"
+    )
+    
+  }
+  
+  # Fit models and export: 
+  fit_and_summarise_mods_bw(mod_formula = lm_formula, sample_ij = sample_ij)
+  
+}
+```
+
+Iterate: 
+
+```{r}
+set.seed(global_seed)
+
+n_num_cat_int_unique_populations <- n_num_cat_int_combinations |> 
+  dplyr::filter(!duplicated(population_id))
+
+n_num_cat_int_n_pop <- nrow(n_num_cat_int_unique_populations)
+
+
+for(i in 1:n_num_cat_int_n_pop){
+  
+  pop_row_i <- n_num_cat_int_unique_populations[i, ]
+  
+  grid_i <- n_num_cat_int_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  n_ratios <- sort(unique(grid_i$n_ratio))
+  
+  pop_i <- generate_n_num_cat_int(
+    n_int = pop_row_i$n_int,
+    sigma_shift = pop_row_i$sigma_shift,
+    n_cat_preds = pop_row_i$n_cat_preds, 
+    n_cont_preds = pop_row_i$n_cont_preds,
+    n = n_population, b = pop_row_i$b, 
+    min_bound = pop_row_i$min_bound, max_bound = pop_row_i$max_bound, 
+    vp_val = pop_row_i$vp_val, n_het_preds = pop_row_i$n_het_pred, 
+    mod_fun = text_as_fun(pop_row_i$mod_fun), 
+    vp_fun = text_as_fun(pop_row_i$vp_fun), 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  if(pop_row_i$n_cat_preds == 2){
+    
+    pop_i[[paste0("n_ratio_w_", n_ratios[1])]] <- ifelse(pop_i$x2_cat == "1" , n_ratios[1], 1)
+    pop_i[[paste0("n_ratio_w_", n_ratios[2])]] <- ifelse(pop_i$x2_cat == "1" , n_ratios[2], 1)
+    pop_i[[paste0("n_ratio_w_", n_ratios[3])]] <- ifelse(pop_i$x2_cat == "1" , n_ratios[3], 1)
+    
+  }
+  
+  pop_i_x1_cat_0 <- pop_i |> dplyr::filter(x1_cat == 0)
+  pop_i_x1_cat_1 <- pop_i |> dplyr::filter(x1_cat == 1)
+  
+  grid_i <- n_num_cat_int_combinations |> dplyr::filter(population_id == pop_row_i$population_id)
+  
+  ## sample fit and save
+  grid_i <- grid_i |> 
+    dplyr::mutate( 
+      sim_results = purrr::pmap(.progress = TRUE, 
+                                .l = list(
+                                  pop_i_x1_cat_0 = list(pop_i_x1_cat_0),
+                                  pop_i_x1_cat_1 = list(pop_i_x1_cat_1),
+                                  n_int = n_int,
+                                  n_cat_preds = n_cat_preds,
+                                  n_ratio = n_ratio, 
+                                  n_bw = n_bw
+                                ), 
+                                .f = n_num_cat_int_sfs
+      )
+    ) |> tidyr::unnest(sim_results)
+  
+  # Export
+  export_results(grid_i, pop_row_i$population_id)
+  
+}
+
+rm(pop_row_i)
+rm(pop_i)
+rm(grid_i)
+gc()
+```
+
+
+Check grid accuracy:
+
+```{r warning=FALSE, eval=FALSE}
+n_num_cat_int_unique_populations <- n_num_cat_int_combinations |> 
+  dplyr::filter(!duplicated(population_id)) |> 
+  dplyr::filter(b == 0.3, 
+                n_cont_preds == 8, 
+                n_cat_preds == 2, 
+                n_int == 2)
+
+n_num_cat_int_n_pop <- nrow(n_num_cat_int_unique_populations)
+
+
+
+quick_run <- function(i, nu = NA, tau = NA, vp_val = NA, sigma_shift = NA){
+  pop_row_i <- n_num_cat_int_unique_populations |> 
+    dplyr::filter(combo_id == i)
+  
+  if(!is.na(nu)) pop_row_i$nu <- nu
+  if(!is.na(tau)) pop_row_i$tau <- tau
+  if(!is.na(vp_val)) pop_row_i$vp_val <- vp_val
+  if(!is.na(sigma_shift)) pop_row_i$sigma_shift <- sigma_shift
+  
+  pop_i <- generate_n_num_cat_int(
+    n_int = pop_row_i$n_int,
+    sigma_shift = pop_row_i$sigma_shift,
+    n_cat_preds = pop_row_i$n_cat_preds, 
+    n_cont_preds = pop_row_i$n_cont_preds,
+    n = n_population, b = pop_row_i$b, 
+    min_bound = pop_row_i$min_bound, max_bound = pop_row_i$max_bound, 
+    vp_val = pop_row_i$vp_val, n_het_preds = pop_row_i$n_het_pred, 
+    mod_fun = text_as_fun(pop_row_i$mod_fun), 
+    vp_fun = text_as_fun(pop_row_i$vp_fun), 
+    nu = pop_row_i$nu, tau = pop_row_i$tau
+  )
+  
+  #lm_mod <- lm(y ~ x1+x1_cat+x2_cat, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2 + x3 + x1_cat + x2_cat + x1:x1_cat + x1:x2_cat, data = pop_i)
+  lm_mod <- lm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x1_cat + x2_cat + x1:x1_cat + x1:x2_cat, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x1_cat, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2 + x3, data = pop_i)
+  #lm_mod <- lm(y ~ x1 + x2 + x3 + x4 + x5 + x6, data = pop_i)
+  
+  pop_i <- broom::augment(lm_mod)
+  
+  betas <- coef(lm_mod)[-1] |> t() |> tibble::as_tibble() 
+  
+  vr <- var(pop_i[which(pop_i$x1_cat == 1), ]$.resid)/var(pop_i[which(pop_i$x1_cat == 0), ]$.resid)
+  skew <- moments::skewness(lm_mod$residuals)
+  kurt <- (moments::kurtosis(lm_mod$residuals)) - 3
+  
+  quantreg_df <- quantreg_interval_pred_z_e(lm_mod$residuals, pop_i$x1)
+  quantreg_mod <- lm(loess_wide ~ x + I(x^2) + I(x^3) + I(x^4), data = quantreg_df)
+  qli_coeffs <- quantreg_mod_coefs(quantreg_mod) |> 
+    dplyr::select(2,3)
+  
+  n_num_cat_int_sim_results_check_i <- tibble::tibble(
+    combo_id = pop_row_i$combo_id, 
+    #betas, 
+    
+    skew = skew, kurt = kurt, 
+    qli_coeffs, 
+    vr = vr
+  )
+  
+  n_num_cat_int_sim_results_check_i
+}
+
+combo_id = 11
+quick_run(combo_id)
+
+quick_run(combo_id, nu = NA, tau = NA, vp_val = NA, sigma_shift = NA)
+
+quick_run_df <- tibble::tibble()
+
+for (i in n_num_cat_int_unique_populations$combo_id){
+  quick_run_df <- rbind(
+    quick_run_df,
+    quick_run(i = i))
+}
+
+n_num_cat_int_unique_populations |> 
+  dplyr::left_join(x = _, quick_run_df) |> 
+  dplyr::select(combo_id, 
+                # target_skew, skew,
+                # target_kurt, kurt, 
+                # target_het, `quantreg_I(x^2)`, quantreg_x, 
+                target_vr, vr
+  ) |> 
+  round(4)
+```
+
+
+
+## Cell count
+
+```{r eval=FALSE}
+all_combinations <- ls(pattern = "_combinations")
+
+combo_row_counts <- purrr::map_dbl(
+  .x = all_combinations, 
+  .f = \(x) x |> text_as_fun() |> nrow()
+)
+
+sum(combo_row_counts)
+```
+
